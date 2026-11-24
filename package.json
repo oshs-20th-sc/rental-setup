@@ -1,0 +1,37 @@
+{
+  "name": "rental-setup",
+  "version": "3.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "rental-setup": "./bin/rental-setup.cjs"
+  },
+  "scripts": {
+    "test": "node --test tests/admin.test.cjs tests/bulk.test.cjs tests/platform.test.cjs",
+    "login": "firebase login",
+    "admin": "node bin/rental-setup.cjs"
+  },
+  "engines": {
+    "node": "^24.22.3"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.1",
+    "firebase-tools": "15.37.0"
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "^1.14.7"
+    },
+    "firebase-tools": {
+      "glob": "^14.0.6",
+      "uuid@^9.0.1": "^11.1.1",
+      "@google-cloud/pubsub": {
+        "@opentelemetry/core": "^2.8.0"
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oshs-20th-sc/rental-setup.git"
+  }
+}

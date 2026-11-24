@@ -1,0 +1,598 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Assumed data model
+    // users/{uid}: { name: string }, provisioned by a trusted operator.
+    // roles/{uid}: { admin: true }, provisioned by a trusted operator.
+    // inventorySettings/v1: { ready: true }, written only by trusted tooling
+    // after every legacy product has a unique productNumbers reservation.
+    // products/{productId}: category, name, displayNo, status, activeRentalId,
+    //   optional isEnabled (legacy absence means enabled).
+    // productNumbers/{category|displayNo}: { productId: string }.
+    // rentals/{rentalId}: immutable borrowerName snapshot is required on new
+    //   records and optional on existing records; only state timestamps change.
+    // adminClocks/{uid}: { now: timestamp }, written by that administrator.
+    // Product IDs remain stable through metadata edits and number changes.
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validUid(uid) {
+      return uid is string && uid.size() > 0 && uid.size() <= 128;
+    }
+
+    function validDocumentId(documentId) {
+      return documentId is string &&
+        documentId.matches('^[A-Za-z0-9_-]{1,128}$');
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function rolePath(uid) {
+      return /databases/$(database)/documents/roles/$(uid);
+    }
+
+    function productPath(productId) {
+      return /databases/$(database)/documents/products/$(productId);
+    }
+
+    function rentalPath(rentalId) {
+      return /databases/$(database)/documents/rentals/$(rentalId);
+    }
+
+    function inventorySettingsPath() {
+      return /databases/$(database)/documents/inventorySettings/v1;
+    }
+
+    function validName(value) {
+      return value is string && value.size() > 0 && value.size() <= 80 &&
+        !value.matches('.*[\\x00-\\x1F\\x7F].*');
+    }
+
+    function validMemberProfile(data) {
+      return data.keys().hasAll(['name']) && validName(data.name) &&
+        !('provisioningId' in data) &&
+        (!('isActive' in data) ||
+          (data.isActive is bool && data.isActive == true));
+    }
+
+    function hasTrustedAdminRole(uid) {
+      return validUid(uid) && exists(rolePath(uid)) &&
+        get(rolePath(uid)).data.admin == true;
+    }
+
+    function memberProfile(data, uid) {
+      return validMemberProfile(data) &&
+        (('studentId' in data)
+          ? data.keys().hasOnly(['name', 'studentId', 'grade', 'isActive']) &&
+            data.studentId is string && data.studentId.matches('^[0-9]{7}$') &&
+            (!('grade' in data) ||
+              (data.grade is int && data.grade >= 1 && data.grade <= 3)) &&
+            request.auth.token.keys().hasAll(['student_id', 'email']) &&
+            request.auth.token.student_id == data.studentId &&
+            request.auth.token.email == data.studentId +
+              '@students.ohsung-rental.invalid'
+          : hasTrustedAdminRole(uid));
+    }
+
+    function hasMembership(uid) {
+      return validUid(uid) && exists(userPath(uid)) &&
+        memberProfile(get(userPath(uid)).data, uid);
+    }
+
+    function isMember() {
+      return signedIn() && hasMembership(request.auth.uid);
+    }
+
+    function isOwner(uid) {
+      return isMember() && request.auth.uid == uid;
+    }
+
+    function uidNotModified(beforeUid, afterUid) {
+      return beforeUid == afterUid;
+    }
+
+    function isAdmin() {
+      return isMember() &&
+        hasTrustedAdminRole(request.auth.uid);
+    }
+
+    function inventoryReady() {
+      return exists(inventorySettingsPath()) &&
+        get(inventorySettingsPath()).data.keys().hasAll(['ready']) &&
+        get(inventorySettingsPath()).data.keys().hasOnly(['ready']) &&
+        get(inventorySettingsPath()).data.ready == true;
+    }
+
+    function validCategory(value) {
+      return value is string && value.size() > 0 && value.size() <= 80 &&
+        value == value.trim() &&
+        !value.matches('.*[|/\\x00-\\x1F\\x7F].*') &&
+        !value.matches('^\\s.*') &&
+        !value.matches('.*\\s$');
+    }
+
+    // Existing inventory can contain legacy categories that violate the
+    // stricter key format. Keep rental status transitions working for those
+    // records while requiring the strict format for newly managed numbers.
+    function validLegacyCategory(value) {
+      return value is string && value.size() > 0 && value.size() <= 80;
+    }
+
+    function validDisplayNo(value) {
+      return value is int && value >= 1 && value <= 9999;
+    }
+
+    function isEnabled(data) {
+      return !('isEnabled' in data) || data.isEnabled == true;
+    }
+
+    function validProduct(data) {
+      return data.keys().hasAll([
+          'category', 'name', 'displayNo', 'status', 'activeRentalId'
+        ]) &&
+        data.keys().hasOnly([
+          'category', 'name', 'displayNo', 'status', 'activeRentalId', 'isEnabled'
+        ]) &&
+        validLegacyCategory(data.category) &&
+        validName(data.name) &&
+        validDisplayNo(data.displayNo) &&
+        data.status in ['available', 'rented', 'return_requested'] &&
+        (data.activeRentalId == null || validDocumentId(data.activeRentalId)) &&
+        (!('isEnabled' in data) || data.isEnabled is bool);
+    }
+
+    function validNewProduct(data) {
+      return validProduct(data) &&
+        validCategory(data.category) &&
+        data.keys().hasAll([
+          'category', 'name', 'displayNo', 'status', 'activeRentalId', 'isEnabled'
+        ]) &&
+        data.isEnabled is bool &&
+        data.status == 'available' &&
+        data.activeRentalId == null;
+    }
+
+    function validReservation(data) {
+      return data.keys().hasAll(['productId']) &&
+        data.keys().hasOnly(['productId']) &&
+        validDocumentId(data.productId);
+    }
+
+    function validRental(data) {
+      return data.keys().hasAll([
+          'userId', 'productId', 'productName', 'displayNo', 'status',
+          'rentedAt', 'returnRequestedAt', 'returnedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'productId', 'productName', 'displayNo', 'status',
+          'rentedAt', 'returnRequestedAt', 'returnedAt', 'borrowerName'
+        ]) &&
+        validUid(data.userId) &&
+        validDocumentId(data.productId) &&
+        validName(data.productName) &&
+        data.displayNo is int && data.displayNo >= 1 && data.displayNo <= 9999 &&
+        data.status in ['rented', 'return_requested', 'returned'] &&
+        data.rentedAt is timestamp &&
+        (data.returnRequestedAt == null || data.returnRequestedAt is timestamp) &&
+        (data.returnedAt == null || data.returnedAt is timestamp) &&
+        (!('borrowerName' in data) || validName(data.borrowerName));
+    }
+
+    function validAdminClock(data) {
+      return data.keys().hasAll(['now']) &&
+        data.keys().hasOnly(['now']) &&
+        data.now is timestamp && data.now == request.time;
+    }
+
+    function validNewRental(data) {
+      return validRental(data) &&
+        data.keys().hasAll([
+          'userId', 'productId', 'productName', 'displayNo', 'status',
+          'rentedAt', 'returnRequestedAt', 'returnedAt', 'borrowerName'
+        ]) &&
+        data.userId == request.auth.uid &&
+        data.status == 'rented' &&
+        data.rentedAt == request.time &&
+        data.returnRequestedAt == null &&
+        data.returnedAt == null &&
+        exists(userPath(request.auth.uid)) &&
+        get(userPath(request.auth.uid)).data.name == data.borrowerName;
+    }
+
+    function productNumberKey(category, displayNo) {
+      return category + '|' + string(displayNo);
+    }
+
+    function productNumberPath(category, displayNo) {
+      return /databases/$(database)/documents/productNumbers/$(productNumberKey(category, displayNo));
+    }
+
+    function reservationMatches(reservationId, productId) {
+      return validDocumentId(productId) &&
+        !exists(productPath(productId)) &&
+        existsAfter(productPath(productId)) &&
+        validNewProduct(getAfter(productPath(productId)).data) &&
+        reservationId == productNumberKey(
+          getAfter(productPath(productId)).data.category,
+          getAfter(productPath(productId)).data.displayNo
+        );
+    }
+
+    function reservationMovesToProduct(reservationId, productId) {
+      return validDocumentId(productId) &&
+        exists(productPath(productId)) &&
+        existsAfter(productPath(productId)) &&
+        get(productPath(productId)).data.status == 'available' &&
+        get(productPath(productId)).data.activeRentalId == null &&
+        (get(productPath(productId)).data.category !=
+            getAfter(productPath(productId)).data.category ||
+          get(productPath(productId)).data.displayNo !=
+            getAfter(productPath(productId)).data.displayNo) &&
+        getAfter(productPath(productId)).data.status == 'available' &&
+        getAfter(productPath(productId)).data.activeRentalId == null &&
+        validProduct(getAfter(productPath(productId)).data) &&
+        validCategory(getAfter(productPath(productId)).data.category) &&
+        reservationId == productNumberKey(
+          getAfter(productPath(productId)).data.category,
+          getAfter(productPath(productId)).data.displayNo
+        ) &&
+        exists(productNumberPath(
+          get(productPath(productId)).data.category,
+          get(productPath(productId)).data.displayNo
+        )) &&
+        get(productNumberPath(
+          get(productPath(productId)).data.category,
+          get(productPath(productId)).data.displayNo
+        )).data.productId == productId &&
+        !existsAfter(productNumberPath(
+          get(productPath(productId)).data.category,
+          get(productPath(productId)).data.displayNo
+        ));
+    }
+
+    function isProductCreationPair(productId) {
+      let reservation = productNumberPath(
+        request.resource.data.category,
+        request.resource.data.displayNo
+      );
+      return validDocumentId(productId) &&
+        isAdmin() && inventoryReady() && validNewProduct(request.resource.data) &&
+        !exists(reservation) && existsAfter(reservation) &&
+        getAfter(reservation).data.keys().hasAll(['productId']) &&
+        getAfter(reservation).data.keys().hasOnly(['productId']) &&
+        getAfter(reservation).data.productId == productId;
+    }
+
+    function isProductNumberChanged() {
+      return request.resource.data.category != resource.data.category ||
+        request.resource.data.displayNo != resource.data.displayNo;
+    }
+
+    function isValidAdminProductUpdate(productId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let active = resource.data.status != 'available' ||
+        resource.data.activeRentalId != null;
+      return isAdmin() &&
+        validProduct(request.resource.data) &&
+        request.resource.data.isEnabled is bool &&
+        changed.hasOnly(['category', 'name', 'displayNo', 'isEnabled']) &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.activeRentalId == resource.data.activeRentalId &&
+        (active
+          ? changed.hasOnly(['isEnabled'])
+          : (isProductNumberChanged()
+            ? inventoryReady() &&
+              validCategory(request.resource.data.category) &&
+              resource.data.status == 'available' &&
+              resource.data.activeRentalId == null &&
+              isProductNumberChangePair(productId)
+            : true));
+    }
+
+    function isProductNumberChangePair(productId) {
+      let oldReservation = productNumberPath(resource.data.category, resource.data.displayNo);
+      let newReservation = productNumberPath(
+        request.resource.data.category,
+        request.resource.data.displayNo
+      );
+      return exists(oldReservation) &&
+        get(oldReservation).data.keys().hasAll(['productId']) &&
+        get(oldReservation).data.keys().hasOnly(['productId']) &&
+        get(oldReservation).data.productId == productId &&
+        !existsAfter(oldReservation) &&
+        !exists(newReservation) &&
+        existsAfter(newReservation) &&
+        getAfter(newReservation).data.keys().hasAll(['productId']) &&
+        getAfter(newReservation).data.keys().hasOnly(['productId']) &&
+        getAfter(newReservation).data.productId == productId;
+    }
+
+    function validReservationMoveDelete(reservationId) {
+      let productId = resource.data.productId;
+      let product = productPath(productId);
+      return isAdmin() && inventoryReady() &&
+        validReservation(resource.data) &&
+        exists(product) && existsAfter(product) &&
+        get(product).data.status == 'available' &&
+        get(product).data.activeRentalId == null &&
+        reservationId == productNumberKey(get(product).data.category, get(product).data.displayNo) &&
+        getAfter(product).data.status == 'available' &&
+        getAfter(product).data.activeRentalId == null &&
+        validProduct(getAfter(product).data) &&
+        reservationId != productNumberKey(
+          getAfter(product).data.category,
+          getAfter(product).data.displayNo
+        ) &&
+        existsAfter(productNumberPath(
+          getAfter(product).data.category,
+          getAfter(product).data.displayNo
+        )) &&
+        getAfter(productNumberPath(
+          getAfter(product).data.category,
+          getAfter(product).data.displayNo
+        )).data.productId == productId;
+    }
+
+    function isBorrowEnabled(product) {
+      return isEnabled(product);
+    }
+
+    function productMatchesRental(product, rental, productId, rentalId) {
+      return rental.productId == productId &&
+        product.displayNo == rental.displayNo &&
+        product.activeRentalId == rentalId;
+    }
+
+    function isNewRentalPair(rental, productId, rentalId) {
+      return rental.status == 'rented' &&
+        rental.userId == request.auth.uid &&
+        rental.rentedAt == request.time &&
+        rental.returnRequestedAt == null &&
+        rental.returnedAt == null &&
+        rental.productName == request.resource.data.name &&
+        productMatchesRental(request.resource.data, rental, productId, rentalId);
+    }
+
+    function isReturnRequestRentalPair(before, after, productId, rentalId) {
+      return mayRequestReturn(before) &&
+        before.status == 'rented' &&
+        before.productId == productId &&
+        before.returnRequestedAt == null &&
+        after.status == 'return_requested' &&
+        after.returnRequestedAt == request.time &&
+        after.returnedAt == null &&
+        productMatchesRental(request.resource.data, after, productId, rentalId);
+    }
+
+    function isReturnApprovalRentalPair(before, after, productId) {
+      return before.status == 'return_requested' &&
+        before.productId == productId &&
+        after.status == 'returned' &&
+        after.returnRequestedAt == before.returnRequestedAt &&
+        after.returnedAt == request.time &&
+        after.productId == productId &&
+        after.userId == before.userId;
+    }
+
+    function isValidBorrowPair(before, after, rentalId) {
+      return before.status == 'available' &&
+        before.activeRentalId == null &&
+        isBorrowEnabled(before) && isBorrowEnabled(after) &&
+        after.status == 'rented' &&
+        after.activeRentalId == rentalId &&
+        after.name == request.resource.data.productName &&
+        after.displayNo == request.resource.data.displayNo;
+    }
+
+    function isValidReturnRequestProductPair(before, after, rentalId) {
+      return before.status == 'rented' &&
+        before.activeRentalId == rentalId &&
+        after.status == 'return_requested' &&
+        after.activeRentalId == rentalId;
+    }
+
+    function isValidReturnApprovalProductPair(before, after, rentalId) {
+      return before.status == 'return_requested' &&
+        before.activeRentalId == rentalId &&
+        after.status == 'available' &&
+        after.activeRentalId == null;
+    }
+
+    function mayRequestReturn(rental) {
+      // Callers must have established isMember() before this helper is used.
+      return (rental.userId == request.auth.uid &&
+          request.time < rental.rentedAt + duration.value(2, 'd')) ||
+        hasTrustedAdminRole(request.auth.uid);
+    }
+
+    function isBorrowPair(productId) {
+      let rentalId = request.resource.data.activeRentalId;
+      return resource.data.status == 'available' &&
+        resource.data.activeRentalId == null &&
+        isBorrowEnabled(resource.data) &&
+        isBorrowEnabled(request.resource.data) &&
+        request.resource.data.status == 'rented' &&
+        validDocumentId(rentalId) &&
+        !exists(rentalPath(rentalId)) &&
+        existsAfter(rentalPath(rentalId)) &&
+        isNewRentalPair(getAfter(rentalPath(rentalId)).data, productId, rentalId);
+    }
+
+    function isReturnRequestPair(productId) {
+      let rentalId = resource.data.activeRentalId;
+      return validDocumentId(rentalId) &&
+        resource.data.status == 'rented' &&
+        request.resource.data.status == 'return_requested' &&
+        request.resource.data.activeRentalId == rentalId &&
+        exists(rentalPath(rentalId)) &&
+        existsAfter(rentalPath(rentalId)) &&
+        isReturnRequestRentalPair(
+          get(rentalPath(rentalId)).data,
+          getAfter(rentalPath(rentalId)).data,
+          productId,
+          rentalId
+        );
+    }
+
+    function isApprovalPair(productId) {
+      let rentalId = resource.data.activeRentalId;
+      return validDocumentId(rentalId) &&
+        // validProductStatusUpdate() has already established membership.
+        hasTrustedAdminRole(request.auth.uid) &&
+        resource.data.status == 'return_requested' &&
+        request.resource.data.status == 'available' &&
+        request.resource.data.activeRentalId == null &&
+        exists(rentalPath(rentalId)) &&
+        existsAfter(rentalPath(rentalId)) &&
+        isReturnApprovalRentalPair(
+          get(rentalPath(rentalId)).data,
+          getAfter(rentalPath(rentalId)).data,
+          productId
+        );
+    }
+
+    function validProductStatusUpdate(productId) {
+      return isMember() &&
+        validProduct(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'activeRentalId'
+        ]) &&
+        (request.resource.data.status == 'rented'
+          ? isBorrowPair(productId)
+          : request.resource.data.status == 'return_requested'
+            ? isReturnRequestPair(productId)
+            : request.resource.data.status == 'available'
+              ? isApprovalPair(productId)
+              : false);
+    }
+
+    function validProductUpdate(productId) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'activeRentalId'
+        ])
+        ? validProductStatusUpdate(productId)
+        : isValidAdminProductUpdate(productId);
+    }
+
+    function validNewRentalPair(rentalId) {
+      return validNewRental(request.resource.data) &&
+        exists(productPath(request.resource.data.productId)) &&
+        existsAfter(productPath(request.resource.data.productId)) &&
+        isValidBorrowPair(
+          get(productPath(request.resource.data.productId)).data,
+          getAfter(productPath(request.resource.data.productId)).data,
+          rentalId
+        );
+    }
+
+    function validReturnRequestUpdate(rentalId) {
+      return resource.data.status == 'rented' &&
+        mayRequestReturn(resource.data) &&
+        validDocumentId(resource.data.productId) &&
+        exists(productPath(resource.data.productId)) &&
+        existsAfter(productPath(resource.data.productId)) &&
+        isValidReturnRequestProductPair(
+          get(productPath(resource.data.productId)).data,
+          getAfter(productPath(resource.data.productId)).data,
+          rentalId
+        ) &&
+        request.resource.data.status == 'return_requested' &&
+        request.resource.data.returnRequestedAt == request.time &&
+        request.resource.data.returnedAt == null;
+    }
+
+    function validReturnApprovalUpdate(rentalId) {
+      // validRentalUpdate() is only called after allow update has established
+      // membership, so the trusted role check is sufficient here.
+      return hasTrustedAdminRole(request.auth.uid) &&
+        resource.data.status == 'return_requested' &&
+        validDocumentId(resource.data.productId) &&
+        exists(productPath(resource.data.productId)) &&
+        existsAfter(productPath(resource.data.productId)) &&
+        isValidReturnApprovalProductPair(
+          get(productPath(resource.data.productId)).data,
+          getAfter(productPath(resource.data.productId)).data,
+          rentalId
+        ) &&
+        request.resource.data.status == 'returned' &&
+        request.resource.data.returnRequestedAt == resource.data.returnRequestedAt &&
+        request.resource.data.returnedAt == request.time;
+    }
+
+    function validRentalUpdate(rentalId) {
+      return validRental(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'returnRequestedAt', 'returnedAt'
+        ]) &&
+        uidNotModified(resource.data.userId, request.resource.data.userId) &&
+        request.resource.data.productId == resource.data.productId &&
+        request.resource.data.productName == resource.data.productName &&
+        request.resource.data.displayNo == resource.data.displayNo &&
+        request.resource.data.rentedAt == resource.data.rentedAt &&
+        (request.resource.data.status == 'return_requested'
+          ? validReturnRequestUpdate(rentalId)
+          : request.resource.data.status == 'returned'
+            ? validReturnApprovalUpdate(rentalId)
+            : false);
+    }
+
+    match /users/{userId} {
+      allow get: if (signedIn() && request.auth.uid == userId)
+        ? (!exists(userPath(userId)) || isMember())
+        : isAdmin();
+      allow list, create, update, delete: if false;
+    }
+
+    match /roles/{userId} {
+      allow get: if isOwner(userId);
+      allow list, create, update, delete: if false;
+    }
+
+    match /inventorySettings/{settingsId} {
+      allow get: if isAdmin() && settingsId == 'v1';
+      allow list, create, update, delete: if false;
+    }
+
+    match /adminClocks/{uid} {
+      allow get: if isAdmin() && request.auth.uid == uid;
+      allow create, update: if isAdmin() && request.auth.uid == uid &&
+        validAdminClock(request.resource.data);
+      allow list, delete: if false;
+    }
+
+    match /productNumbers/{reservationId} {
+      allow get: if isAdmin();
+      allow list: if false;
+      allow create: if isAdmin() && inventoryReady() &&
+        validReservation(request.resource.data) &&
+        (reservationMatches(reservationId, request.resource.data.productId) ||
+          reservationMovesToProduct(reservationId, request.resource.data.productId));
+      allow update: if false;
+      allow delete: if validReservationMoveDelete(reservationId);
+    }
+
+    match /products/{productId} {
+      allow get, list: if isMember();
+      allow create: if isProductCreationPair(productId);
+      allow update: if validProductUpdate(productId);
+      allow delete: if false;
+    }
+
+    match /rentals/{rentalId} {
+      allow get, list: if isMember() &&
+        (hasTrustedAdminRole(request.auth.uid) || resource.data.userId == request.auth.uid);
+      allow create: if isMember() && validNewRentalPair(rentalId) &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if isMember() && validRentalUpdate(rentalId);
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,19 @@
+node_modules/
+.env*
+*.local.json
+*credentials*.json
+*roster*.json
+*students*.json
+*service-account*.json
+*serviceAccount*.json
+*.private.json
+*.pem
+*.key
+*.log
+.firebase/
+# Keep real rosters and credentials outside this package.
+*student-credentials*.json
+*student-admin-audit*.jsonl
+rules-backup-*.json
+*.lock
+!/students.example.json
