@@ -17,10 +17,47 @@ function validJournal(j,project,roster,shared){return (j?.version===(shared===un
 function importRecord(s,shared){const salt=randomBytes(16);return {uid:s.studentId,email:email(s),displayName:marker(s),disabled:shared,customClaims:{student_id:s.studentId},passwordSalt:salt,passwordHash:pbkdf2Sync(s.password,salt,ROUNDS,32,'sha256')};}
 async function authIndex(auth){const uid=new Map(),emails=new Map();let token;do{const p=await auth.listUsers(1000,token);for(const u of p.users){uid.set(u.uid,u);if(u.email){const key=u.email.toLowerCase();const a=emails.get(key)??[];a.push(u);emails.set(key,a);}}token=p.pageToken;}while(token);return {uid,emails};}
 function classify(s,project,idx,p,r,l){const u=idx.uid.get(s.studentId), byEmail=idx.emails.get(email(s))??[];if(r.exists||l.exists||idx.uid.has(legacy(project,s))||byEmail.some(a=>a.uid!==s.studentId)||byEmail.length>1)return 'blocked';if(p.exists&&completeMatches(p.data(),s)&&identity(u,s))return 'complete';if(p.exists&&!stageMatches(p.data(),s))return 'blocked';if(u&&(!p.exists||!owned(u,s)))return 'blocked';return u?'resume':'new';}
-async function stage(db,project,s,idx){const p=db.doc(`users/${s.studentId}`),r=db.doc(`roles/${s.studentId}`),l=db.doc(`users/${legacy(project,s)}`);return {s,p,r,l,idx};}
-async function plan(auth,db,project,students){const idx=await authIndex(auth),rows=[];for(const group of chunks(students,READ)){const refs=await Promise.all(group.map(s=>stage(db,project,s,idx)));const docs=await db.getAll(...refs.flatMap(x=>[x.p,x.r,x.l]));for(let i=0;i<refs.length;i++){const x=refs[i];rows.push({...x,kind:classify(x.s,project,idx,docs[i*3],docs[i*3+1],docs[i*3+2])});}}return rows;}
-async function stageGroup(db,project,rows){return db.runTransaction(async t=>{const docs=await t.getAll(...rows.flatMap(x=>[x.p,x.r,x.l]));const accepted=[];for(let i=0;i<rows.length;i++){const x=rows[i],p=docs[3*i],kind=classify(x.s,project,x.idx,p,docs[3*i+1],docs[3*i+2]);if(kind!=='new'&&kind!=='resume')continue;if(!p.exists)t.create(x.p,{...core(x.s),isActive:false,provisioningId:x.s.provisioningId});accepted.push(x);}return accepted;});}
-async function finalizeGroup(db,rows,shared){return db.runTransaction(async t=>{const docs=await t.getAll(...rows.flatMap(x=>[x.p,x.r]));let done=0;for(let i=0;i<rows.length;i++){const x=rows[i],p=docs[2*i],r=docs[2*i+1];if(r.exists||!p.exists||!stageMatches(p.data(),x.s))continue;t.set(x.p,{...core(x.s),isActive:!shared});done++;}return done;});}
+async function plan(auth,db,project,students){
+ const idx=await authIndex(auth),rows=[];
+ for(const group of chunks(students,READ)){
+  const refs=group.map(s=>({
+   s,p:db.doc(`users/${s.studentId}`),r:db.doc(`roles/${s.studentId}`),l:db.doc(`users/${legacy(project,s)}`),
+  }));
+  const docs=await db.getAll(...refs.flatMap(x=>[x.p,x.r,x.l]));
+  for(let i=0;i<refs.length;i++){
+   const x=refs[i],[profile,role,legacyProfile]=docs.slice(i*3,i*3+3);
+   rows.push({...x,profile,kind:classify(x.s,project,idx,profile,role,legacyProfile)});
+  }
+ }
+ return rows;
+}
+async function stageGroup(db,rows){
+ const missing=rows.filter(x=>x.kind==='new'&&!x.profile.exists);
+ if(!missing.length)return;
+ const writer=db.bulkWriter(),pending=[];
+ try{
+  for(const x of missing){
+   // Create-only writes cannot replace an existing profile. The fresh read
+   // after this batch distinguishes our staged records from conflicting writes.
+   pending.push(writer.create(x.p,{...core(x.s),isActive:false,provisioningId:x.s.provisioningId})
+    .catch(()=>undefined));
+  }
+ }finally{await writer.close();}
+ await Promise.all(pending);
+}
+async function finalizeGroup(db,rows,shared){
+ return db.runTransaction(async t=>{
+  const docs=await t.getAll(...rows.flatMap(x=>[x.p,x.r,x.l]));
+  let done=0;
+  for(let i=0;i<rows.length;i++){
+   const x=rows[i],[profile,role,legacyProfile]=docs.slice(i*3,i*3+3);
+   if(role.exists||legacyProfile.exists||!profile.exists||!stageMatches(profile.data(),x.s))continue;
+   t.set(x.p,{...core(x.s),isActive:!shared});
+   done++;
+  }
+  return done;
+ });
+}
 // Mirrors the guarded batchCreate adapter in the main web repository. Fail closed
 // on SDK changes, since the public importUsers method alone overwrites duplicate UIDs.
 function guardedImport(auth,records,options,sdkVersion){
@@ -34,24 +71,39 @@ function guardedImport(auth,records,options,sdkVersion){
  const guardedAuth=Object.create(auth);guardedAuth.authRequestHandler=guardedHandler;
  return guardedAuth.importUsers(records,options);
 }
-async function provision(auth,db,project,students,{shared=false,log=console.log,importer=(rs,opts)=>auth.importUsers(rs,opts)}={}){
+async function provision(auth,db,project,students,{shared=false,log=console.log,importer}={}){
+ if(typeof importer!=='function')throw Error('안전한 Auth import 함수를 명시해야 합니다.');
  let issued=0,skipped=0,failed=0,stopped=false;
  const stop=()=>{stopped=true;};process.on('SIGINT',stop);process.on('SIGTERM',stop);
  try{for(const batch of chunks(students,BATCH)){
    if(stopped)break;
    const rows=await plan(auth,db,project,batch);skipped+=rows.filter(x=>x.kind==='complete').length;failed+=rows.filter(x=>x.kind==='blocked').length;
-   let staged=[];for(const group of chunks(rows.filter(x=>x.kind==='new'||x.kind==='resume'),READ)){if(stopped)break;const a=await stageGroup(db,project,group);failed+=group.length-a.length;staged.push(...a);}
+   const candidates=rows.filter(x=>x.kind==='new'||x.kind==='resume');
+   for(const group of chunks(candidates,READ)){if(stopped)break;await stageGroup(db,group);}
    if(stopped)break;
-   // Fresh account import only. Hash first, then re-read all Auth identities immediately before import.
-   const prepared=staged.filter(x=>x.kind==='new').map(x=>({x,record:importRecord(x.s,shared)}));
-   const freshIndex=await authIndex(auth);const fresh=prepared.filter(({x})=>!freshIndex.uid.has(x.s.studentId)&&!freshIndex.uid.has(legacy(project,x.s))&&!(freshIndex.emails.get(email(x.s))??[]).length);
+   // Hash before re-reading Auth and Firestore so a long batch cannot rely on
+   // stale role or identity checks. Finalization verifies the profile again.
+   const prepared=new Map(candidates.filter(x=>x.kind==='new').map(x=>[x.s.studentId,importRecord(x.s,shared)]));
+   const checked=await plan(auth,db,project,candidates.map(x=>x.s)),ready=[],fresh=[];
+   for(const x of checked){
+    if(x.kind==='complete'){skipped++;continue;}
+    if(stageMatches(x.profile.data(),x.s)){
+     if(x.kind==='resume'){ready.push(x);continue;}
+     if(x.kind==='new'&&prepared.has(x.s.studentId)){
+      ready.push(x);
+      fresh.push(prepared.get(x.s.studentId));
+      continue;
+     }
+    }
+    failed++;
+   }
    log(`Auth import: ${fresh.length} accounts (max ${BATCH})`);
    if(stopped)break;
-   if(fresh.length){const result=await importer(fresh.map(x=>x.record),{hash:{algorithm:'PBKDF2_SHA256',rounds:ROUNDS}});log(`Auth import result: ${result.successCount} success / ${result.failureCount} failed`);}
+   if(fresh.length){const result=await importer(fresh,{hash:{algorithm:'PBKDF2_SHA256',rounds:ROUNDS}});log(`Auth import result: ${result.successCount} success / ${result.failureCount} failed`);}
    // Verify every result independently, including a previous interrupted import. Never overwrite existing accounts.
-   const verified=await authIndex(auth),ready=[];
-   for(const x of staged){const u=verified.uid.get(x.s.studentId),aliases=verified.emails.get(email(x.s))??[];if(!owned(u,x.s)||aliases.length!==1||verified.uid.has(legacy(project,x.s))||u.disabled!==shared){failed++;continue;}ready.push(x);}
-   for(const group of chunks(ready,READ)){if(stopped)break;const n=await finalizeGroup(db,group,shared);issued+=n;failed+=group.length-n;}
+   const verified=await authIndex(auth),finalize=[];
+   for(const x of ready){const u=verified.uid.get(x.s.studentId),aliases=verified.emails.get(email(x.s))??[];if(!owned(u,x.s)||aliases.length!==1||verified.uid.has(legacy(project,x.s))||u.disabled!==shared){failed++;continue;}finalize.push(x);}
+   for(const group of chunks(finalize,READ)){if(stopped)break;const n=await finalizeGroup(db,group,shared);issued+=n;failed+=group.length-n;}
    log(`Issued ${issued} / skipped ${skipped} / failed ${failed}`);
  }
  return {issued,skipped,failed,unprocessed:students.length-issued-skipped-failed,stopped};

@@ -1,0 +1,3 @@
+/config/*.json text eol=lf
+/config/firestore.rules text eol=lf
+/lib/studentIdentity.js text eol=lf

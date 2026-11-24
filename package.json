@@ -7,7 +7,9 @@
     "rental-setup": "./bin/rental-setup.cjs"
   },
   "scripts": {
-    "test": "node --test tests/admin.test.cjs tests/bulk.test.cjs tests/platform.test.cjs",
+    "test": "node --test",
+    "config:check": "node scripts/sync-firestore-config.cjs check",
+    "config:sync": "node scripts/sync-firestore-config.cjs sync",
     "login": "firebase login",
     "admin": "node bin/rental-setup.cjs"
   },

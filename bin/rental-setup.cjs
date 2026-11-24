@@ -19,7 +19,6 @@ const ROOT = path.resolve(__dirname,'..');
 const WINDOWS = process.platform === 'win32';
 const suffix=PROJECT==='ohsung-rental'?'':`-${PROJECT}`;
 const PRIVATE = WINDOWS ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(),'AppData','Local'),'OhsungRental-private'+suffix) : path.join(os.homedir(), '.ohsung-rental-private'+suffix);
-const DEFAULT_ROSTER = process.env.OHSUNG_ROSTER ? path.resolve(process.env.OHSUNG_ROSTER) : path.join(os.homedir(), 'Downloads', '2026_students_revised.json');
 const DEFAULT_JOURNAL = process.env.OHSUNG_JOURNAL ? path.resolve(process.env.OHSUNG_JOURNAL) : path.join(PRIVATE, 'admin-student-credentials.json');
 const validId = v => typeof v === 'string' && /^[0-9]{7}$/.test(v);
 const validName = v => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 80 && !/[\x00-\x1f\x7f]/.test(v);
@@ -42,6 +41,7 @@ rental-setup sync [--roster JSON] [--apply]
 rental-setup purge 학번 [--apply] / purge-all [--apply]
 rental-setup doctor / audit
 rental-setup private-path
+register/sync는 --roster JSON 또는 OHSUNG_ROSTER가 필요합니다.
 일괄 등록은 최대 1,000명씩 Auth import. 기존 계정은 덮어쓰지 않습니다.
 기본값은 조회/사전 검사입니다. --apply만 실제 변경하며 확인 문구가 필요합니다.
 --concurrency 1~10 (기본 5): 개별 변경 작업의 동시 처리 수
@@ -59,6 +59,7 @@ function parse(argv){
   const [cmd='help',id,...extra]=positionals;
   if(!Object.hasOwn(allowed,cmd)||extra.length||(single.has(cmd)?!validId(id):id!==undefined)) throw Error('명령/학번 형식을 확인하세요. rental-setup help');
   if(o.apply&&o.check) throw Error('--apply와 --check는 함께 사용할 수 없습니다.');
+  if((cmd==='register'||cmd==='sync')&&!o.roster&&!process.env.OHSUNG_ROSTER) throw Error('명단을 지정하세요: --roster JSON 또는 OHSUNG_ROSTER 환경변수');
   const keys = [...allowed[cmd],...(mutations.has(cmd)?['apply','check','concurrency']:[])];
   if(Object.keys(o).some(k=>!keys.includes(k))) throw Error('해당 명령에서 지원하지 않는 옵션입니다.');
   if(o.grade!==undefined && !/^[123]$/.test(o.grade)) throw Error('학년은 1~3입니다.');
@@ -155,7 +156,7 @@ async function mutate(auth,db,action,id,changes={}){
   }
   const row=await current(auth,db,id);
   if(action==='edit'||action==='sync'){await profileUpdate(db,id,changes);return;}
-  if(action==='reset'){await auth.updateUser(id,{password:changes.password});return;}
+  if(action==='reset'){await auth.updateUser(id,{password:changes.password});await auth.revokeRefreshTokens(id);return;}
   if(action==='enable'){
     if(row.state==='enabled')return;
     await auth.updateUser(id,{disabled:false});
@@ -186,6 +187,8 @@ async function withFirebase(frontend,fn){
     } finally {try{if(db)await db.terminate();}finally{if(app)await sdk.deleteApp(app);}}
   }
   const lib=path.join(frontend,'node_modules','firebase-tools','lib');
+  const {version}=require(path.join(lib,'..','package.json'));
+  if(version!=='15.37.0')throw Error('Firebase CLI 로그인 호환 버전을 확인하거나 표준 ADC를 사용하세요.');
   const {getGlobalDefaultAccount}=require(path.join(lib,'auth.js'));
   const {clientId,clientSecret}=require(path.join(lib,'api.js'));
   const token=getGlobalDefaultAccount()?.tokens?.refresh_token;
@@ -193,17 +196,41 @@ async function withFirebase(frontend,fn){
   const tmp=fs.mkdtempSync(path.join(PRIVATE,'.admin-adc-'));
   const credential=path.join(tmp,'credentials.json');let app,sdk,db;
   const prev=process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const removeCredential=()=>fs.rmSync(tmp,{recursive:true,force:true});
+  const interrupt=()=>{
+    // Bulk account commands may handle cancellation and finish their current batch.
+    if(process.listenerCount('SIGINT')===1)process.exit(130);
+  };
+  const terminate=()=>{
+    if(process.listenerCount('SIGTERM')===1)process.exit(143);
+  };
+  process.once('exit',removeCredential);
+  process.on('SIGINT',interrupt);
+  process.on('SIGTERM',terminate);
   try{
     createPrivate(credential,{type:'authorized_user',client_id:clientId(),client_secret:clientSecret(),refresh_token:token});
     process.env.GOOGLE_APPLICATION_CREDENTIALS=credential;
     const env={...process.env};
     const connect=()=>{sdk=req('firebase-admin/app');app=sdk.initializeApp({projectId:PROJECT,credential:sdk.applicationDefault()});db=req('firebase-admin/firestore').getFirestore(app);return {auth:req('firebase-admin/auth').getAuth(app),db,app};};
     return await fn({env,connect});
-  }finally{try{if(db)await db.terminate();}finally{try{if(app)await sdk.deleteApp(app);}finally{if(prev===undefined)delete process.env.GOOGLE_APPLICATION_CREDENTIALS;else process.env.GOOGLE_APPLICATION_CREDENTIALS=prev;fs.rmSync(tmp,{recursive:true,force:true});}}}
+  }finally{
+    try{if(db)await db.terminate();}
+    finally{
+      try{if(app)await sdk.deleteApp(app);}
+      finally{
+        if(prev===undefined)delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        else process.env.GOOGLE_APPLICATION_CREDENTIALS=prev;
+        process.removeListener('SIGINT',interrupt);
+        process.removeListener('SIGTERM',terminate);
+        process.removeListener('exit',removeCredential);
+        removeCredential();
+      }
+    }
+  }
 }
 async function register(frontend,cmd,id,o,ctx){
   const singleRow=cmd==='add'?{studentId:id,name:o.name.trim(),...(o.grade?{grade:Number(o.grade)}:{})}:null;
-  const roster=path.resolve(o.roster??DEFAULT_ROSTER);
+  const roster=singleRow?null:path.resolve(o.roster??process.env.OHSUNG_ROSTER);
   const rows=singleRow?[singleRow]:readRoster(roster);
   const journal=cmd==='add'?path.join(PRIVATE,`add-${id}-credentials.json`):path.resolve(o.journal??(o.roster?path.join(PRIVATE,`${path.basename(roster,'.json')}-credentials.json`):DEFAULT_JOURNAL));
   if(path.relative(PRIVATE,path.dirname(journal))!=='')throw Error('발급 기록은 개인 폴더 안에 지정하세요. rental-setup private-path');
@@ -250,7 +277,7 @@ async function operate(auth,db,cmd,id,o,concurrency){
   if(action==='disable')targets=targets.filter(r=>r.state==='enabled'||r.u?.disabled!==true||r.profile?.data()?.isActive!==false);
   let syncChanges=new Map();
   if(action==='sync'){
-    const roster=readRoster(path.resolve(o.roster??DEFAULT_ROSTER)),byId=new Map(rows.map(r=>[r.id,r]));
+    const roster=readRoster(path.resolve(o.roster??process.env.OHSUNG_ROSTER)),byId=new Map(rows.map(r=>[r.id,r]));
     for(const s of roster){const r=byId.get(s.studentId);if(!r||!managed(r.state))continue;const d=r.profile.data(),c={};if(d.name!==s.name)c.name=s.name;if(s.grade!==undefined&&d.grade!==s.grade)c.grade=s.grade;if(Object.keys(c).length)syncChanges.set(r.id,c);}
     const set=new Set(roster.map(s=>s.studentId));
     console.log(JSON.stringify({metadataUpdates:syncChanges.size,newOrUnverified:roster.filter(s=>!managed(byId.get(s.studentId)?.state)).length,absentFromRoster:targets.filter(r=>!set.has(r.id)).length}));

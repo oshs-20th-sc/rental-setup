@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/oshs-20th-sc/ohsung-rental.git",
+    "revision": "e549c51f4b21d41c698000caa37d9bb8e31cafff",
+    "ref": "main",
+    "verification": "clean-local-checkout",
+    "networkFetch": false
+  },
+  "files": [
+    {
+      "sourcePath": "firestore.rules",
+      "targetPath": "config/firestore.rules",
+      "bytes": 23554,
+      "sha256": "c3e7285d7ecbe28772506c70f1b5b4aaf90ad18dfdff167f7e0bd2547866086d"
+    },
+    {
+      "sourcePath": "firestore.indexes.json",
+      "targetPath": "config/firestore.indexes.json",
+      "bytes": 4039,
+      "sha256": "54dd319ad74d6943aec1e85dab495c4cd83eeecc48d49d2e841a31d5abac7513"
+    },
+    {
+      "sourcePath": "firebase.json",
+      "targetPath": "config/firebase.json",
+      "bytes": 330,
+      "sha256": "ec401ba29707cd92bb8cfec1c9ee041440d4707e6a7e1c2e91473dc91fb66d0e"
+    },
+    {
+      "sourcePath": "frontend/src/services/studentIdentity.js",
+      "targetPath": "lib/studentIdentity.js",
+      "bytes": 557,
+      "sha256": "26d62f3bafb7dae3ca9cb137ecaf652c15944e3b460cd39d9ca345677211206f"
+    }
+  ]
+}

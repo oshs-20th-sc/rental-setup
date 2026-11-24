@@ -83,19 +83,53 @@ async function upsertProduct(db,product,apply){const reserve=db.doc(`productNumb
  return db.runTransaction(async t=>{const [s,r]=await Promise.all([t.get(settings),t.get(reserve)]);if(!ready(s))throw Error('inventory-init을 먼저 실행하세요.');if(r.exists){const pid=r.data()?.productId;if(typeof pid!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(pid))throw Error('잘못된 번호 예약');const p=await t.get(db.doc(`products/${pid}`));if(!p.exists||key(p.data())!==key(product)||p.data().name!==product.name||(p.data().isEnabled!==false)!==product.isEnabled)throw Error('동일 번호의 기존 물품과 정보가 다릅니다.');return {state:'exists',id:pid};}if(apply){t.create(ref,{...product,status:'available',activeRentalId:null});t.create(reserve,{productId:ref.id});}return {state:apply?'created':'new',id:apply?ref.id:undefined};});}
 async function editProduct(db,cmd,o,apply){const ref=db.doc(`products/${o.id}`),settings=db.doc('inventorySettings/v1');return db.runTransaction(async t=>{const p=await t.get(ref);if(!p.exists)throw Error('물품 없음');const old=p.data();if(!['available','rented','return_requested'].includes(old.status))throw Error('알 수 없는 대여 상태');const item=productInput({category:o.category??old.category,name:o.name??old.name,displayNo:o.number===undefined?old.displayNo:Number(o.number),isEnabled:cmd==='products-enable'?true:cmd==='products-disable'?false:old.isEnabled!==false});const changed=key(item)!==key(old);if(cmd==='products-edit'&&(old.status!=='available'||old.activeRentalId!==null))throw Error('대여 중에는 사용 여부만 변경할 수 있습니다.');if(changed){if(old.status!=='available'||old.activeRentalId!==null)throw Error('대여 중 번호/카테고리 변경 금지');const a=db.doc(`productNumbers/${key(old)}`),b=db.doc(`productNumbers/${key(item)}`);const [s,ar,br]=await Promise.all([t.get(settings),t.get(a),t.get(b)]);if(!ready(s)||!ar.exists||ar.data()?.productId!==ref.id||br.exists)throw Error('물품 번호 인덱스 불일치 또는 중복');if(apply){t.delete(a);t.create(b,{productId:ref.id});}}if(apply)t.update(ref,item);return {id:ref.id,old:{category:old.category,name:old.name,displayNo:old.displayNo,isEnabled:old.isEnabled!==false},next:item};});}
 function adminIdentity(u){return !!u&&typeof u.uid==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(u.uid)&&!/^\d{7}$/.test(u.uid)&&typeof u.email==='string'&&!u.email.toLowerCase().endsWith('@students.ohsung-rental.invalid')&&!Object.hasOwn(u.customClaims??{},'student_id');}
+function activeAdminProfile(data){
+ return data&&typeof data.name==='string'&&data.name.trim().length>0&&data.name.length<=80&&
+  !/[\x00-\x1f\x7f]/.test(data.name)&&!Object.hasOwn(data,'studentId')&&
+  !Object.hasOwn(data,'provisioningId')&&(!Object.hasOwn(data,'isActive')||data.isActive===true);
+}
+async function remainingAdmin(auth,db,roles,targetUid){
+ for(const {id} of roles){
+  if(id===targetUid)continue;
+  let account;
+  try{account=await auth.getUser(id);}
+  catch(error){if(error.code==='auth/user-not-found')continue;throw error;}
+  if(!adminIdentity(account)||account.disabled)continue;
+  const profile=db.doc(`users/${id}`);
+  if(activeAdminProfile((await profile.get()).data()))return {profile,role:db.doc(`roles/${id}`)};
+ }
+ return null;
+}
 async function adminChange(auth,db,cmd,o,ctx){let user;try{user=await auth.getUserByEmail(o.email);}catch(e){if(e.code!=='auth/user-not-found')throw e;}
  if(cmd==='admin-add'&&user)throw Error('이미 Auth 계정이 존재합니다. 검증 후 admin-grant를 사용하세요.');
  if(cmd!=='admin-add'&&(!adminIdentity(user)||cmd==='admin-grant'&&(!user.emailVerified||user.disabled)))throw Error('학생 계정이 아니며 이메일 확인이 완료된 활성 관리자 계정인지 확인하세요.');
- console.log(JSON.stringify({action:cmd,email:o.email,existing:!!user}));if(!o.apply)return;
+ console.log(JSON.stringify({action:cmd,email:o.email,existing:!!user}));
+ if(cmd==='admin-revoke'){
+  const role=db.doc(`roles/${user.uid}`);
+  const {docs}=await db.collection('roles').where('admin','==',true).get();
+  if(!docs.some(({id})=>id===user.uid))throw Error('관리자 역할 없음');
+  const survivor=await remainingAdmin(auth,db,docs,user.uid);
+  if(!survivor)throw Error('마지막 관리자 권한은 삭제할 수 없습니다. 로그인 가능한 다른 관리자부터 확인하세요.');
+  if(!o.apply)return;
+  await db.runTransaction(async transaction=>{
+   const [current,otherRole,otherProfile]=await Promise.all([
+    transaction.get(role),transaction.get(survivor.role),transaction.get(survivor.profile),
+   ]);
+   if(current.data()?.admin!==true)throw Error('관리자 역할 없음');
+   if(otherRole.data()?.admin!==true||!activeAdminProfile(otherProfile.data()))throw Error('마지막 관리자 권한은 삭제할 수 없습니다.');
+   transaction.delete(role);
+  });
+  await auth.revokeRefreshTokens(user.uid);
+  return;
+ }
+ if(!o.apply)return;
  if(cmd==='admin-add'){const password=ctx.randomPassword(),file=path.join(ctx.privateDir,`admin-credentials-${ctx.stamp()}.json`);ctx.createPrivate(file,{projectId:ctx.project,email:o.email,password});user=await auth.createUser({email:o.email,password,disabled:true});if(!adminIdentity(user))throw Error('생성한 관리자 UID/이메일 검증 실패. 계정 비활성 상태 유지');console.log('초기 관리자 비밀번호 파일:',file);}
  const uid=user.uid,profile=db.doc(`users/${uid}`),role=db.doc(`roles/${uid}`);
- if(cmd==='admin-revoke'){
-   await db.runTransaction(async t=>{const [r,all]=await Promise.all([t.get(role),t.get(db.collection('roles').where('admin','==',true))]);if(!r.exists||r.data()?.admin!==true)throw Error('관리자 역할 없음');if(all.size<=1)throw Error('마지막 관리자 권한은 삭제할 수 없습니다.');t.delete(role);});await auth.revokeRefreshTokens(uid);return;
- }
  await db.runTransaction(async t=>{const [p,r]=await Promise.all([t.get(profile),t.get(role)]);if(p.exists&&Object.keys(p.data()).some(k=>!['name','isActive'].includes(k))||r.exists&&Object.keys(r.data()).some(k=>k!=='admin'))throw Error('기존 프로필/역할과 충돌합니다.');t.set(profile,{name:validText(o.name,'관리자 이름'),isActive:true});t.set(role,{admin:true});});
  if(cmd==='admin-add')await auth.updateUser(uid,{disabled:false});console.log('관리자 권한 적용 완료');
 }
-async function runPlatform(parsed,ctx){const {cmd,o}=parsed,{project,auth,db,app}=ctx;const api=client(app.options.credential);const service=()=>require('firebase-admin/security-rules').getSecurityRules(app);console.log(`대상 Firebase 프로젝트: ${project} | ${o.apply?'실제 변경':'조회/사전 검사'}`);
+const bundledConfigCommands=new Set(['setup','setup-status','rules-status','rules-deploy','indexes-status','indexes-deploy']);
+async function runPlatform(parsed,ctx){const {cmd,o}=parsed;if(bundledConfigCommands.has(cmd)){const check=ctx.assertBundledConfig??(()=>require('../scripts/sync-firestore-config.cjs').assertBundledConfig());check();}const {project,auth,db,app}=ctx;const api=client(app.options.credential);const service=()=>require('firebase-admin/security-rules').getSecurityRules(app);console.log(`대상 Firebase 프로젝트: ${project} | ${o.apply?'실제 변경':'조회/사전 검사'}`);
  if(o.apply&&!await ctx.confirm(`${cmd.toUpperCase()} ${project}`)){console.log('취소');return 0;}
  if(o.apply)ctx.audit({action:cmd,status:'started'});
  try{

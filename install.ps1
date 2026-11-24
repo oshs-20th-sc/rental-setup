@@ -4,8 +4,9 @@ $node = Get-Command node.exe -ErrorAction Stop
 $version = & $node.Source -p "process.versions.node"
 if ([version]$version -lt [version]'24.22.3' -or ([version]$version).Major -ne 24) { throw 'Install compatible Node.js 24.x (>=24.22.3), then retry.' }
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-if (Test-Path -LiteralPath 'package-lock.json') { & $npm ci } else { & $npm install }
-if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+if (-not (Test-Path -LiteralPath 'package-lock.json' -PathType Leaf)) { throw 'package-lock.json is missing. Download the complete release, then retry.' }
+& $npm ci
+if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
 & $npm test
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
 $private = Join-Path $env:LOCALAPPDATA 'OhsungRental-private'
