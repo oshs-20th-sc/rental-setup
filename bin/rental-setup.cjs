@@ -29,8 +29,8 @@ const HELP = `빌리러 오성 통합 관리자 CLI (프로젝트: ${PROJECT})
 rental-setup help
 rental-setup list [--query 검색어] [--grade 1|2|3]
 rental-setup show 학번
-rental-setup register [--roster JSON] [--journal JSON] [--initial-password 값] [--apply]
-rental-setup add 학번 --name 이름 [--grade 1|2|3] [--initial-password 값] [--apply]
+rental-setup register [--roster JSON] [--journal JSON] [--initial-password 값] [--activate] [--apply]
+rental-setup add 학번 --name 이름 [--grade 1|2|3] [--initial-password 값] [--activate] [--apply]
 rental-setup edit 학번 [--name 이름] [--grade 1|2|3] [--apply]
 rental-setup reset 학번 [--initial-password 값] [--apply]
 rental-setup reset-all [--initial-password 값] [--apply]
@@ -46,10 +46,10 @@ register/sync는 --roster JSON 또는 OHSUNG_ROSTER가 필요합니다.
 기본값은 조회/사전 검사입니다. --apply만 실제 변경하며 확인 문구가 필요합니다.
 --concurrency 1~10 (기본 5): 개별 변경 작업의 동시 처리 수
 삭제는 Auth 계정 제거 + Firestore 비활성 프로필 보존입니다. 대여 기록은 삭제하지 않습니다.`+platform.HELP;
-const options = {apply:{type:'boolean'},check:{type:'boolean'},roster:{type:'string'},journal:{type:'string'},name:{type:'string'},grade:{type:'string'},query:{type:'string'},'initial-password':{type:'string'},concurrency:{type:'string'}};
+const options = {activate:{type:'boolean'},apply:{type:'boolean'},check:{type:'boolean'},roster:{type:'string'},journal:{type:'string'},name:{type:'string'},grade:{type:'string'},query:{type:'string'},'initial-password':{type:'string'},concurrency:{type:'string'}};
 const allowed = {
   help:[], 'private-path':[], audit:[], doctor:[], list:['query','grade'], show:[],
-  register:['roster','journal','initial-password'],add:['name','grade','initial-password'],edit:['name','grade'],
+  register:['roster','journal','initial-password','activate'],add:['name','grade','initial-password','activate'],edit:['name','grade'],
   reset:['initial-password'], 'reset-all':['initial-password'],enable:[], 'enable-all':[],disable:[], 'disable-all':[],delete:[], 'delete-all':[],purge:[], 'purge-all':[],sync:['roster']
 };
 const single = new Set(['show','add','edit','reset','enable','disable','delete','purge']);
@@ -66,6 +66,7 @@ function parse(argv){
   if(o.name!==undefined && !validName(o.name)) throw Error('이름은 제어문자 없는 1~80자로 입력하세요.');
   if(cmd==='add'&&!o.name || cmd==='edit'&&o.name===undefined&&o.grade===undefined) throw Error('--name 또는 --grade 옵션을 확인하세요.');
   if(o['initial-password']!==undefined&&(o['initial-password'].length<6||o['initial-password'].length>128)) throw Error('비밀번호는 6~128자로 입력하세요.');
+  if(o.activate&&o['initial-password']===undefined) throw Error('--activate는 --initial-password와 함께 사용하세요.');
   const concurrency=Number(o.concurrency??5);
   if(!Number.isInteger(concurrency)||concurrency<1||concurrency>10) throw Error('동시 처리 수는 1~10입니다.');
   return {cmd,id,o,concurrency};
@@ -236,17 +237,20 @@ async function register(frontend,cmd,id,o,ctx){
   if(path.relative(PRIVATE,path.dirname(journal))!=='')throw Error('발급 기록은 개인 폴더 안에 지정하세요. rental-setup private-path');
   console.log(`프로젝트 ${PROJECT} | 명단 ${rows.length}명 | 최대 1000명씩 import`);
   const shared=o['initial-password'];
+  const activate=o.activate===true;
+  console.log(`신규 계정 발급 상태: ${shared!==undefined&&!activate?'비활성':'활성'}`);
+  if(activate)console.log('경고: 공통 비밀번호로 활성화하면 학번을 아는 사람이 타인 계정에 접근할 수 있습니다. 실제 운영에서는 개인별 비밀번호를 권장합니다.');
   let j;
-  if(fs.existsSync(journal)){assertPrivateFile(journal);j=JSON.parse(fs.readFileSync(journal,'utf8').replace(/^\uFEFF/,''));if(!bulk.validJournal(j,PROJECT,rows,shared))throw Error('기존 발급 기록과 목록/초기 비밀번호 옵션이 다릅니다. 기존 파일과 옵션을 유지하거나 별도 --journal을 지정하세요.');}
+  if(fs.existsSync(journal)){assertPrivateFile(journal);j=JSON.parse(fs.readFileSync(journal,'utf8').replace(/^\uFEFF/,''));if(!bulk.validJournal(j,PROJECT,rows,shared,activate))throw Error('기존 발급 기록과 목록/초기 비밀번호/활성화 옵션이 다릅니다. 기존 파일과 옵션을 유지하거나 별도 --journal을 지정하세요.');}
   if(!o.apply){console.log(`명단 형식 검사 완료. 예상 최대 ${Math.ceil(rows.length/1000)}회 import. 서버 중복 검사는 실제 발급 전 수행합니다.`);return 0;}
   console.log('다른 관리자 작업/등록을 중지하세요. 서버 중복 방지 및 로컬 잠금을 함께 사용합니다.');
-  if(shared!==undefined)console.log('지정 공통 비밀번호 신규 계정은 비활성 상태로 발급됩니다. 개인별 비밀번호 발급 후 활성화하세요.');
-  if(!await confirm(`REGISTER ${rows.length}`))return 0;
-  if(!j){j=bulk.makeJournal(PROJECT,rows,shared);const temp=journal+'.tmp-'+stamp();try{createPrivate(temp,j);fs.linkSync(temp,journal);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
+  if(shared!==undefined&&!activate)console.log('지정 공통 비밀번호 신규 계정은 비활성 상태로 발급됩니다. 개인별 비밀번호 발급 후 활성화하세요.');
+  if(!await confirm(`REGISTER ${rows.length}${activate?' ACTIVE':''}`))return 0;
+  if(!j){j=bulk.makeJournal(PROJECT,rows,shared,activate);const temp=journal+'.tmp-'+stamp();try{createPrivate(temp,j);fs.linkSync(temp,journal);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
   console.log(`발급 기록: ${journal}`);
   const {auth,db}=ctx.connect();
   audit({action:cmd,status:'started',count:rows.length});
-  const result=await bulk.provision(auth,db,PROJECT,j.students,{shared:shared!==undefined,importer:(records,options)=>bulk.guardedImport(auth,records,options,require('firebase-admin/app').SDK_VERSION)});
+  const result=await bulk.provision(auth,db,PROJECT,j.students,{shared:shared!==undefined,activate,importer:(records,options)=>bulk.guardedImport(auth,records,options,require('firebase-admin/app').SDK_VERSION)});
   audit({action:cmd,status:'finished',...result});console.log(JSON.stringify(result));
   return result.stopped?130:result.failed||result.unprocessed?1:0;
 }

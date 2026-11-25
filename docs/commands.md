@@ -42,8 +42,8 @@ rental-setup --project PROJECT_ID rules-rollback --ruleset RULESET_ID
 | 명령과 인자 | 권한 | 검사와 적용 범위 |
 | --- | --- | --- |
 | `list [--query 검색어] [--grade 1\|2\|3]` · `show 학번` | Auth, 데이터 읽기 | 이름, 학년과 계정 상태를 조회합니다. 출력에 학생 정보가 들어 있습니다. |
-| `register --roster JSON [--journal JSON] [--initial-password 값] [--apply]` | 검사는 로컬, 적용은 Auth·데이터 | 형식·중복, 재개용 기록을 검사합니다. 적용하면 기존 계정을 보호하면서 대상의 Auth와 Firestore 프로필을 새로 발급합니다. |
-| `add 학번 --name 이름 [--grade 1\|2\|3] [--initial-password 값] [--apply]` | 검사는 로컬, 적용은 Auth·데이터 | 같은 발급 과정을 한 학생에게 실행합니다. |
+| `register --roster JSON [--journal JSON] [--initial-password 값] [--activate] [--apply]` | 검사는 로컬, 적용은 Auth·데이터 | 형식·중복, 재개용 기록을 검사합니다. 적용하면 기존 계정을 보호하면서 대상의 Auth와 Firestore 프로필을 새로 발급합니다. |
+| `add 학번 --name 이름 [--grade 1\|2\|3] [--initial-password 값] [--activate] [--apply]` | 검사는 로컬, 적용은 Auth·데이터 | 같은 발급 과정을 한 학생에게 실행합니다. |
 | `edit 학번 [--name 이름] [--grade 1\|2\|3] [--apply]` | Auth, 데이터 | 적어도 하나의 필드를 지정합니다. 프로필의 이름·학년을 변경하며 UID, 비밀번호와 대여 기록을 유지합니다. |
 | `reset 학번 [--initial-password 값] [--apply]` · `reset-all [--initial-password 값] [--apply]` | Auth, 데이터 읽기 | 임시 비밀번호를 발급하고 기존 갱신 토큰을 폐기합니다. 파일에 기록하고 성공을 확인한 항목만 전달합니다. 프로필과 활성 상태는 유지합니다. |
 | `enable 학번 [--apply]` · `enable-all [--apply]` | Auth, 데이터 | 현재 비밀번호로 로그인할 수 있게 Auth와 프로필을 활성화합니다. 공통 비밀번호를 가진 계정에는 미리 개인 비밀번호를 발급합니다. |
@@ -54,7 +54,7 @@ rental-setup --project PROJECT_ID rules-rollback --ruleset RULESET_ID
 | `doctor` | Auth, 데이터 읽기 | Auth와 프로필·역할 간 정합성 상태를 요약합니다. |
 | `private-path` · `audit` | 로컬 | 프로젝트별 개인 작업 폴더와 감사 로그 경로를 확인합니다. |
 
-`OHSUNG_ROSTER`를 명시적으로 설정하면 `register`, `sync`의 명단 기본값으로 사용할 수 있습니다. `--journal`은 해당 프로젝트의 개인 폴더 바로 아래 파일을 지정하세요. 발급 기록은 사전 또는 실패 항목의 비밀번호도 보관할 수 있으므로 실행 결과와 대조하세요. 반복 실행 때 초기 비밀번호를 다시 발급하지 않도록 원래 명단·옵션·기록을 사용합니다. 개별 변경 명령의 동시 처리 수는 `--concurrency 1`부터 `10`까지입니다.
+`OHSUNG_ROSTER`를 명시적으로 설정하면 `register`, `sync`의 명단 기본값으로 사용할 수 있습니다. `--journal`은 해당 프로젝트의 개인 폴더 바로 아래 파일을 지정하세요. 발급 기록은 사전 또는 실패 항목의 비밀번호도 보관할 수 있으므로 실행 결과와 대조하세요. 반복 실행 때 초기 비밀번호를 다시 발급하지 않도록 원래 명단·옵션·기록을 사용합니다. `--activate`는 `register`와 `add`에서 `--initial-password`와 함께 지정할 때만 허용되며, 공통 비밀번호 신규 계정을 활성 상태로 확정합니다. `REGISTER 인원수 ACTIVE` 확인 문구를 입력하세요. 공통 비밀번호로 활성 발급할 경우 타인 계정에 대한 무단 접근 위험이 있습니다. 활성화 옵션은 발급 기록과 일치해야 하며 기존 계정은 변경하지 않습니다. 개별 변경 명령의 동시 처리 수는 `--concurrency 1`부터 `10`까지입니다.
 
 ~~~sh
 rental-setup --project PROJECT_ID show 2600001

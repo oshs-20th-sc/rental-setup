@@ -16,6 +16,12 @@ function mock({u={...account},p={...profile},r,loans=[]}={}){
 }
 test('read only by default, explicit apply',()=>{assert.equal(parse(['reset',id]).o.apply,undefined);assert.equal(parse(['reset',id,'--apply']).o.apply,true);});
 test('bulk roster commands require an explicit or configured roster',()=>{const previous=process.env.OHSUNG_ROSTER;try{delete process.env.OHSUNG_ROSTER;assert.throws(()=>parse(['register']),/--roster JSON/);assert.throws(()=>parse(['sync']),/--roster JSON/);assert.doesNotThrow(()=>parse(['register','--roster','students.json']));process.env.OHSUNG_ROSTER='students.json';assert.doesNotThrow(()=>parse(['sync']));}finally{if(previous===undefined)delete process.env.OHSUNG_ROSTER;else process.env.OHSUNG_ROSTER=previous;}});
+test('activate is explicit and only accepted for shared-password issuance',()=>{
+ assert.equal(parse(['register','--roster','students.json','--initial-password','Example-Pass','--activate']).o.activate,true);
+ assert.equal(parse(['add',id,'--name','Test','--initial-password','Example-Pass','--activate']).o.activate,true);
+ assert.throws(()=>parse(['register','--roster','students.json','--activate']));
+ assert.throws(()=>parse(['reset',id,'--initial-password','Example-Pass','--activate']));
+});
 test('reject bad id, options, grade and concurrency',()=>{for(const a of [['delete','123'],['show',id,'--apply'],['edit',id,'--grade','4'],['delete-all','--check','--apply'],['reset-all','--concurrency','20']])assert.throws(()=>parse(a));});
 test('strict student identity and admin exclusion',()=>{const p=snapshot(id,profile);assert.equal(state(id,account,p,role),'enabled');assert.equal(state(id,account,p,snapshot(id,{admin:true})),'protected');assert.equal(state(id,{...account,customClaims:{student_id:id,admin:true}},p,role),'mismatch');assert.equal(state(id,{...account,email:'other@example.invalid'},p,role),'mismatch');});
 test('archive and pending provisioning exclusion',()=>{assert.equal(state(id,null,snapshot(id,{...profile,isActive:false}),role),'archived');assert.equal(state(id,account,snapshot(id,{...profile,provisioningId:'test'}),role),'mismatch');});

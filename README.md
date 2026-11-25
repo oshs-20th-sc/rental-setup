@@ -100,7 +100,7 @@ rental-setup --project PROJECT_ID register --roster "/path/to/private/students.j
 rental-setup --project PROJECT_ID register --roster "/path/to/private/students.json" --apply
 ~~~
 
-개인별 임시 비밀번호가 기본입니다. 공통 비밀번호로 신규 발급된 계정은 비활성 상태로 시작합니다. 학생별 비밀번호를 다시 설정한 뒤 활성화합니다. CLI는 Firestore BulkWriter로 비활성 프로필을 먼저 준비하고, Auth 결과와 프로필 소유권을 확인한 뒤 트랜잭션으로 등록을 확정합니다.
+개인별 임시 비밀번호가 기본입니다. 공통 비밀번호로 신규 발급된 계정은 기본적으로 비활성 상태로 시작합니다. 학생별 비밀번호를 다시 설정한 뒤 활성화합니다. 공통 비밀번호와 `--activate`를 함께 지정하면 신규 계정을 활성 상태로 발급할 수 있습니다. 이 경우 `REGISTER 인원수 ACTIVE` 확인 문구가 필요하며, 재실행 시 동일한 활성화 옵션과 발급 기록을 사용해야 합니다. 공통 비밀번호로 활성 발급하면 학번을 아는 사람이 타인 계정에 접근할 수 있으므로, 실제 운영에서는 개인별 비밀번호 사용을 권장합니다.
 
 ## 학생 개별 관리
 

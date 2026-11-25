@@ -93,6 +93,31 @@ test('shared import leaves both Auth and profile disabled',async()=>{
  a.equal(x.users.get(id).disabled,true);
  a.equal(x.docs.get(`users/${id}`).isActive,false);
 });
+test('explicit shared activation is bound to its journal and issues active accounts',async()=>{
+ const x=mock(),password='Example-Shared-QA!123';
+ const j=makeJournal(project,rows,password,true);
+ a.equal(j.version,3);
+ a.ok(validJournal(j,project,rows,password,true));
+ a.ok(!validJournal(j,project,rows,password));
+ a.ok(!validJournal(makeJournal(project,rows,password),project,rows,password,true));
+ const opts={...x.options,shared:true,activate:true};
+ const first=await provision(x.auth,x.db,project,j.students,opts);
+ a.equal(first.issued,1);
+ a.equal(x.users.get(id).disabled,false);
+ a.equal(x.docs.get(`users/${id}`).isActive,true);
+ const retry=await provision(x.auth,x.db,project,j.students,opts);
+ a.equal(retry.skipped,1);
+ a.deepEqual(x.imports,[1]);
+});
+test('shared active registration resumes an already imported staged account',async()=>{
+ const x=mock(),j=makeJournal(project,rows,'Example-Shared-QA!123',true),student=j.students[0];
+ x.docs.set(`users/${id}`,{...rows[0],isActive:false,provisioningId:student.provisioningId});
+ x.users.set(id,importRecord(student,false));
+ const result=await provision(x.auth,x.db,project,j.students,{...x.options,shared:true,activate:true});
+ a.equal(result.issued,1);
+ a.equal(x.docs.get(`users/${id}`).isActive,true);
+ a.deepEqual(x.imports,[]);
+});
 test('recover staged imported account without reimport',async()=>{
  const x=mock();
  x.docs.set(`users/${id}`,{...rows[0],isActive:false,provisioningId:s.provisioningId});

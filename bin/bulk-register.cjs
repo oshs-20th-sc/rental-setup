@@ -12,9 +12,9 @@ const stageMatches=(d,s)=>equalCore(d,s)&&d.isActive===false&&d.provisioningId==
 const completeMatches=(d,s)=>equalCore(d,s)&&Object.keys(d).every(k=>['studentId','name','grade','isActive'].includes(k))&&(d.isActive===undefined||typeof d.isActive==='boolean');
 const identity=(u,s)=>u&&u.uid===s.studentId&&u.email?.toLowerCase()===email(s)&&u.customClaims?.student_id===s.studentId&&Object.keys(u.customClaims).length===1;
 const owned=(u,s)=>identity(u,s)&&u.displayName===marker(s);
-function makeJournal(project,roster,shared){return {version:shared===undefined?1:2,projectId:project,students:roster.map(s=>({...core(s),password:shared??`Aa1!${randomBytes(32).toString('base64url')}`,provisioningId:randomBytes(32).toString('base64url')}))};}
-function validJournal(j,project,roster,shared){return (j?.version===(shared===undefined?1:2)||(shared!==undefined&&j?.version===1))&&j.projectId===project&&Array.isArray(j.students)&&j.students.length===roster.length&&j.students.every((s,i)=>equalCore(s,roster[i])&&Object.keys(s).every(k=>['studentId','name','grade','password','provisioningId'].includes(k))&&/^[A-Za-z0-9_-]{43}$/.test(s.provisioningId??'')&&(shared===undefined?/^Aa1![A-Za-z0-9_-]{43}$/.test(s.password??''):s.password===shared));}
-function importRecord(s,shared){const salt=randomBytes(16);return {uid:s.studentId,email:email(s),displayName:marker(s),disabled:shared,customClaims:{student_id:s.studentId},passwordSalt:salt,passwordHash:pbkdf2Sync(s.password,salt,ROUNDS,32,'sha256')};}
+function makeJournal(project,roster,shared,activate=false){return {version:activate?3:shared===undefined?1:2,projectId:project,students:roster.map(s=>({...core(s),password:shared??`Aa1!${randomBytes(32).toString('base64url')}`,provisioningId:randomBytes(32).toString('base64url')}))};}
+function validJournal(j,project,roster,shared,activate=false){return (activate?shared!==undefined&&j?.version===3:j?.version===(shared===undefined?1:2)||(shared!==undefined&&j?.version===1))&&j.projectId===project&&Array.isArray(j.students)&&j.students.length===roster.length&&j.students.every((s,i)=>equalCore(s,roster[i])&&Object.keys(s).every(k=>['studentId','name','grade','password','provisioningId'].includes(k))&&/^[A-Za-z0-9_-]{43}$/.test(s.provisioningId??'')&&(shared===undefined?/^Aa1![A-Za-z0-9_-]{43}$/.test(s.password??''):s.password===shared));}
+function importRecord(s,disabled){const salt=randomBytes(16);return {uid:s.studentId,email:email(s),displayName:marker(s),disabled,customClaims:{student_id:s.studentId},passwordSalt:salt,passwordHash:pbkdf2Sync(s.password,salt,ROUNDS,32,'sha256')};}
 async function authIndex(auth){const uid=new Map(),emails=new Map();let token;do{const p=await auth.listUsers(1000,token);for(const u of p.users){uid.set(u.uid,u);if(u.email){const key=u.email.toLowerCase();const a=emails.get(key)??[];a.push(u);emails.set(key,a);}}token=p.pageToken;}while(token);return {uid,emails};}
 function classify(s,project,idx,p,r,l){const u=idx.uid.get(s.studentId), byEmail=idx.emails.get(email(s))??[];if(r.exists||l.exists||idx.uid.has(legacy(project,s))||byEmail.some(a=>a.uid!==s.studentId)||byEmail.length>1)return 'blocked';if(p.exists&&completeMatches(p.data(),s)&&identity(u,s))return 'complete';if(p.exists&&!stageMatches(p.data(),s))return 'blocked';if(u&&(!p.exists||!owned(u,s)))return 'blocked';return u?'resume':'new';}
 async function plan(auth,db,project,students){
@@ -45,14 +45,14 @@ async function stageGroup(db,rows){
  }finally{await writer.close();}
  await Promise.all(pending);
 }
-async function finalizeGroup(db,rows,shared){
+async function finalizeGroup(db,rows,disabled){
  return db.runTransaction(async t=>{
   const docs=await t.getAll(...rows.flatMap(x=>[x.p,x.r,x.l]));
   let done=0;
   for(let i=0;i<rows.length;i++){
    const x=rows[i],[profile,role,legacyProfile]=docs.slice(i*3,i*3+3);
    if(role.exists||legacyProfile.exists||!profile.exists||!stageMatches(profile.data(),x.s))continue;
-   t.set(x.p,{...core(x.s),isActive:!shared});
+   t.set(x.p,{...core(x.s),isActive:!disabled});
    done++;
   }
   return done;
@@ -71,7 +71,9 @@ function guardedImport(auth,records,options,sdkVersion){
  const guardedAuth=Object.create(auth);guardedAuth.authRequestHandler=guardedHandler;
  return guardedAuth.importUsers(records,options);
 }
-async function provision(auth,db,project,students,{shared=false,log=console.log,importer}={}){
+async function provision(auth,db,project,students,{shared=false,activate=false,log=console.log,importer}={}){
+ if(activate&&!shared)throw Error('--activate requires a shared initial password');
+ const disabled=shared&&!activate;
  if(typeof importer!=='function')throw Error('안전한 Auth import 함수를 명시해야 합니다.');
  let issued=0,skipped=0,failed=0,stopped=false;
  const stop=()=>{stopped=true;};process.on('SIGINT',stop);process.on('SIGTERM',stop);
@@ -83,7 +85,7 @@ async function provision(auth,db,project,students,{shared=false,log=console.log,
    if(stopped)break;
    // Hash before re-reading Auth and Firestore so a long batch cannot rely on
    // stale role or identity checks. Finalization verifies the profile again.
-   const prepared=new Map(candidates.filter(x=>x.kind==='new').map(x=>[x.s.studentId,importRecord(x.s,shared)]));
+   const prepared=new Map(candidates.filter(x=>x.kind==='new').map(x=>[x.s.studentId,importRecord(x.s,disabled)]));
    const checked=await plan(auth,db,project,candidates.map(x=>x.s)),ready=[],fresh=[];
    for(const x of checked){
     if(x.kind==='complete'){skipped++;continue;}
@@ -102,8 +104,8 @@ async function provision(auth,db,project,students,{shared=false,log=console.log,
    if(fresh.length){const result=await importer(fresh,{hash:{algorithm:'PBKDF2_SHA256',rounds:ROUNDS}});log(`Auth import result: ${result.successCount} success / ${result.failureCount} failed`);}
    // Verify every result independently, including a previous interrupted import. Never overwrite existing accounts.
    const verified=await authIndex(auth),finalize=[];
-   for(const x of ready){const u=verified.uid.get(x.s.studentId),aliases=verified.emails.get(email(x.s))??[];if(!owned(u,x.s)||aliases.length!==1||verified.uid.has(legacy(project,x.s))||u.disabled!==shared){failed++;continue;}finalize.push(x);}
-   for(const group of chunks(finalize,READ)){if(stopped)break;const n=await finalizeGroup(db,group,shared);issued+=n;failed+=group.length-n;}
+   for(const x of ready){const u=verified.uid.get(x.s.studentId),aliases=verified.emails.get(email(x.s))??[];if(!owned(u,x.s)||aliases.length!==1||verified.uid.has(legacy(project,x.s))||u.disabled!==disabled){failed++;continue;}finalize.push(x);}
+   for(const group of chunks(finalize,READ)){if(stopped)break;const n=await finalizeGroup(db,group,disabled);issued+=n;failed+=group.length-n;}
    log(`Issued ${issued} / skipped ${skipped} / failed ${failed}`);
  }
  return {issued,skipped,failed,unprocessed:students.length-issued-skipped-failed,stopped};
