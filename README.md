@@ -126,7 +126,7 @@ rental-setup --project PROJECT_ID products-import --file "/path/to/private/produ
 ## Firebase 웹 환경변수와 배포
 
 12. **CLI**에서 `web-config`를 실행합니다. 웹 앱이 여러 개면 `--app-id APP_ID`를 붙입니다.
-13. **Cloudflare Pages 콘솔**에서 아래 네 값을 Production 환경변수에 넣고 웹을 다시 빌드·배포합니다. GitHub Pages는 Actions 변수를 저장하고 수동 워크플로를 실행합니다.
+13. **Cloudflare Pages 콘솔**에서 아래 네 값을 Production 환경변수에 넣고 웹을 다시 빌드·배포합니다.
 14. **운영 확인**에서 학생·관리자 로그인, 물품 조회, 대여·반납, 승인과 이력 조회를 확인합니다. [웹사이트 배포 안내](https://github.com/oshs-20th-sc/ohsung-rental#readme)
 
 ~~~sh
@@ -144,12 +144,11 @@ Firebase를 교체할 때는 새 프로젝트를 같은 순서로 구축하고 �
 
 [전체 명령어 참조](docs/commands.md)에서 명령별 옵션, IAM 권한, 변경 내용과 재시도를 확인합니다. 계정 연결 상태는 `doctor`, 변경 결과는 `audit`, 개인 작업 폴더는 `private-path`로 확인합니다.
 
-## 개인정보와 인수인계
+## 개인정보
 
 명단, 관리자 인증 파일, 발급·초기화 기록, 로그와 Rules 백업은 저장소와 분리합니다. 기본 개인 작업 폴더는 macOS/Linux에서 `~/.ohsung-rental-private`, Windows에서 `%LOCALAPPDATA%\OhsungRental-private`입니다. 다른 프로젝트에는 프로젝트별 접미사가 붙습니다. 로그에도 학번 등 개인정보가 포함될 수 있습니다.
 
-후임에게 프로젝트 ID, CLI 버전, 설정 기준 웹 커밋, 배포 도메인, 학교의 데이터 보관과 계정 회수 기준을 전달합니다. 후임은 자신에게 승인된 Google 계정으로 로그인하고, 인수인계 후 이전 담당자의 IAM과 웹 관리자 권한을 검토합니다.
 
 ## 검증과 라이선스
 
-`npm test`와 `npm run config:check`는 로컬에서 실행할 수 있습니다. Auth Emulator는 일괄 등록 때 전달한 외부 해시로 로그인하는 흐름을 검증할 수 없으므로, 운영 적용 전 학교가 승인한 별도 Firebase 프로젝트에서 가상 계정 발급 직후 로그인까지 확인합니다. [라이선스](LICENSE)
+`npm test`와 `npm run config:check`는 로컬에서 실행할 수 있습니다. Auth Emulator는 일괄 등록 때 전달한 외부 해시로 로그인하는 흐름을 검증할 수 없으므로, 운영 적용 전에 별도 Firebase 프로젝트에서 가상 계정 발급 직후 로그인까지 확인합니다. [라이선스](LICENSE)

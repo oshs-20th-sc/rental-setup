@@ -107,9 +107,9 @@ rental-setup --project PROJECT_ID products-edit --id PRODUCT_ID --name "공용 �
 
 ~~~sh
 npm run config:check
-npm run config:check -- --source "../ohsung-rental-deploy"
-npm run config:sync -- --source "../ohsung-rental-deploy" --commit WEB_COMMIT_SHA
-npm run config:check -- --source "../ohsung-rental-deploy"
+npm run config:check -- --source "../ohsung-rental"
+npm run config:sync -- --source "../ohsung-rental" --commit WEB_COMMIT_SHA
+npm run config:check -- --source "../ohsung-rental"
 npm test
 ~~~
 

@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'ohsung-rental-deploy');
+const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'ohsung-rental');
 const MANIFEST_PATH = 'config/firebase-config-provenance.json';
 const REPOSITORY = 'https://github.com/oshs-20th-sc/ohsung-rental.git';
 const FILES = Object.freeze([
