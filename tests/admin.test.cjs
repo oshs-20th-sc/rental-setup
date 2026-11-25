@@ -10,7 +10,7 @@ function mock({u={...account},p={...profile},r,loans=[]}={}){
   const events=[];
   const ref=path=>({path,id:path.split('/')[1]});
   const get=doc=>doc.query?{docs:loans.map((d,i)=>snapshot(String(i),d)),empty:loans.length===0}:snapshot(doc.id,doc.path.startsWith('roles/')?r:p);
-  const db={doc:ref,getAll:async(...refs)=>refs.map(get),collection:()=>({where:()=>{const q={query:true,get:async()=>get(q),limit:()=>q};return q;}}),runTransaction:async fn=>fn({get:async doc=>get(doc),update:(doc,changes)=>{events.push(['profile',changes]);p={...p,...changes};},delete:()=>{events.push(['purge']);p=undefined;}})};
+  const db={doc:ref,getAll:async(...refs)=>refs.map(get),collection:()=>({where:()=>{const q={query:true,get:async()=>get(q),limit:()=>q,select:()=>q};return q;}}),runTransaction:async fn=>fn({get:async doc=>get(doc),update:(doc,changes)=>{events.push(['profile',changes]);p={...p,...changes};},delete:()=>{events.push(['purge']);p=undefined;}})};
   const auth={getUsers:async()=>({users:u?[u]:[]}),updateUser:async(_,changes)=>{events.push(['auth',changes]);u={...u,...changes};},revokeRefreshTokens:async()=>events.push(['revoke']),deleteUser:async()=>{events.push(['deleteAuth']);u=null;}};
   return {auth,db,events};
 }

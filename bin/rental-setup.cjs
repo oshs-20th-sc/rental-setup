@@ -124,24 +124,38 @@ async function confirm(text){
   const rl=createInterface({input:process.stdin,output:process.stdout});
   try{return (await rl.question(`계속하려면 ${text} 입력: `))===text;}finally{rl.close();}
 }
-async function readTargets(auth,db,ids){
-  if(ids===null){const snap=await db.collection('users').get();ids=snap.docs.map(d=>d.id).filter(validId).sort();}
+async function readTargets(auth,db,ids,concurrency=5,reuseProfiles=true){
+  let existingProfiles;
+  if(ids===null){
+    const snap=await db.collection('users').get();
+    ids=snap.docs.map(d=>d.id).filter(validId).sort();
+    if(reuseProfiles)existingProfiles=new Map(snap.docs.filter(d=>validId(d.id)).map(d=>[d.id,d]));
+  }
   const rows=[];
-  for(let i=0;i<ids.length;i+=100){
-    const chunk=ids.slice(i,i+100);
-    const [a,p,r]=await Promise.all([auth.getUsers(chunk.map(uid=>({uid}))),db.getAll(...chunk.map(id=>db.doc(`users/${id}`))),db.getAll(...chunk.map(id=>db.doc(`roles/${id}`)))]);
-    const accounts=new Map(a.users.map(u=>[u.uid,u]));const profiles=new Map(p.map(d=>[d.id,d]));const roles=new Map(r.map(d=>[d.id,d]));
-    for(const id of chunk){const u=accounts.get(id),profile=profiles.get(id),role=roles.get(id);rows.push({id,u,profile,state:state(id,u,profile,role)});}
-  }return rows;
+  for(let i=0;i<ids.length;i+=100*concurrency){
+    const groups=[];
+    for(let j=i;j<Math.min(i+100*concurrency,ids.length);j+=100)groups.push(ids.slice(j,j+100));
+    const pages=await Promise.all(groups.map(async chunk=>{
+      const [a,p,r]=await Promise.all([
+        auth.getUsers(chunk.map(uid=>({uid}))),
+        existingProfiles?Promise.resolve(chunk.map(id=>existingProfiles.get(id))):db.getAll(...chunk.map(id=>db.doc(`users/${id}`))),
+        db.getAll(...chunk.map(id=>db.doc(`roles/${id}`))),
+      ]);
+      const accounts=new Map(a.users.map(u=>[u.uid,u]));const profiles=new Map(p.map(d=>[d.id,d]));const roles=new Map(r.map(d=>[d.id,d]));
+      return chunk.map(id=>{const u=accounts.get(id),profile=profiles.get(id),role=roles.get(id);return {id,u,profile,state:state(id,u,profile,role)};});
+    }));
+    rows.push(...pages.flat());
+  }
+  return rows;
 }
-async function current(auth,db,id){const [r]=await readTargets(auth,db,[id]);if(!managed(r.state))throw Error('학생 계정 검증 실패');return r;}
+async function current(auth,db,id){const [r]=await readTargets(auth,db,[id],1);if(!managed(r.state))throw Error('학생 계정 검증 실패');return r;}
 async function profileUpdate(db,id,changes){
   const p=db.doc(`users/${id}`),r=db.doc(`roles/${id}`);
   await db.runTransaction(async t=>{const [ps,rs]=await Promise.all([t.get(p),t.get(r)]);if(rs.exists||!ps.exists||!managed(state(id,{uid:id,email:`${id}@students.ohsung-rental.invalid`,customClaims:{student_id:id}},ps,rs)))throw Error('프로필 변경 중 계정 상태 불일치');t.update(p,changes);});
 }
 async function hasOpenRental(db,id){
   // Single-field query avoids needing a composite index. Unknown states fail closed.
-  const q=await db.collection('rentals').where('userId','==',id).get();
+  const q=await db.collection('rentals').where('userId','==',id).select('status').get();
   return q.docs.some(d=>d.get('status')!=='returned');
 }
 async function mutate(auth,db,action,id,changes={}){
@@ -256,7 +270,7 @@ async function register(frontend,cmd,id,o,ctx){
 }
 async function operate(auth,db,cmd,id,o,concurrency){
   const all=!single.has(cmd);
-  const rows=await readTargets(auth,db,all?null:[id]);
+  const rows=await readTargets(auth,db,all?null:[id],concurrency,!o.apply);
   const counts={};for(const row of rows)counts[row.state]=(counts[row.state]??0)+1;
   console.log(JSON.stringify({project:PROJECT,counts},null,2));
   if(cmd==='list'||cmd==='show'){

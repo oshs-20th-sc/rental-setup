@@ -81,7 +81,38 @@ async function inventory(db,apply){const {migrateInventory}=await import('../lib
 const ready=s=>s.exists&&s.data()?.ready===true&&Object.keys(s.data()).length===1;
 async function upsertProduct(db,product,apply){const reserve=db.doc(`productNumbers/${key(product)}`),settings=db.doc('inventorySettings/v1'),ref=db.collection('products').doc();
  return db.runTransaction(async t=>{const [s,r]=await Promise.all([t.get(settings),t.get(reserve)]);if(!ready(s))throw Error('inventory-init을 먼저 실행하세요.');if(r.exists){const pid=r.data()?.productId;if(typeof pid!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(pid))throw Error('잘못된 번호 예약');const p=await t.get(db.doc(`products/${pid}`));if(!p.exists||key(p.data())!==key(product)||p.data().name!==product.name||(p.data().isEnabled!==false)!==product.isEnabled)throw Error('동일 번호의 기존 물품과 정보가 다릅니다.');return {state:'exists',id:pid};}if(apply){t.create(ref,{...product,status:'available',activeRentalId:null});t.create(reserve,{productId:ref.id});}return {state:apply?'created':'new',id:apply?ref.id:undefined};});}
-async function editProduct(db,cmd,o,apply){const ref=db.doc(`products/${o.id}`),settings=db.doc('inventorySettings/v1');return db.runTransaction(async t=>{const p=await t.get(ref);if(!p.exists)throw Error('물품 없음');const old=p.data();if(!['available','rented','return_requested'].includes(old.status))throw Error('알 수 없는 대여 상태');const item=productInput({category:o.category??old.category,name:o.name??old.name,displayNo:o.number===undefined?old.displayNo:Number(o.number),isEnabled:cmd==='products-enable'?true:cmd==='products-disable'?false:old.isEnabled!==false});const changed=key(item)!==key(old);if(cmd==='products-edit'&&(old.status!=='available'||old.activeRentalId!==null))throw Error('대여 중에는 사용 여부만 변경할 수 있습니다.');if(changed){if(old.status!=='available'||old.activeRentalId!==null)throw Error('대여 중 번호/카테고리 변경 금지');const a=db.doc(`productNumbers/${key(old)}`),b=db.doc(`productNumbers/${key(item)}`);const [s,ar,br]=await Promise.all([t.get(settings),t.get(a),t.get(b)]);if(!ready(s)||!ar.exists||ar.data()?.productId!==ref.id||br.exists)throw Error('물품 번호 인덱스 불일치 또는 중복');if(apply){t.delete(a);t.create(b,{productId:ref.id});}}if(apply)t.update(ref,item);return {id:ref.id,old:{category:old.category,name:old.name,displayNo:old.displayNo,isEnabled:old.isEnabled!==false},next:item};});}
+async function editProduct(db,cmd,o,apply){
+ const ref=db.doc(`products/${o.id}`),settings=db.doc('inventorySettings/v1');
+ return db.runTransaction(async t=>{
+  const snapshot=await t.get(ref);
+  if(!snapshot.exists)throw Error('물품 없음');
+  const old=snapshot.data();
+  if(!['available','rented','return_requested'].includes(old.status))throw Error('알 수 없는 대여 상태');
+  const item=productInput({
+   category:o.category??old.category,
+   name:o.name??old.name,
+   displayNo:o.number===undefined?old.displayNo:Number(o.number),
+   isEnabled:cmd==='products-enable'?true:cmd==='products-disable'?false:old.isEnabled!==false,
+  });
+  const reservationChanged=key(item)!==key(old);
+  const changed=reservationChanged||item.category!==old.category||item.displayNo!==old.displayNo||
+   item.name!==old.name||item.isEnabled!==old.isEnabled;
+  if(cmd==='products-edit'&&(old.status!=='available'||old.activeRentalId!==null))throw Error('대여 중에는 사용 여부만 변경할 수 있습니다.');
+  if(reservationChanged){
+   if(old.status!=='available'||old.activeRentalId!==null)throw Error('대여 중 번호/카테고리 변경 금지');
+   const oldReservation=db.doc(`productNumbers/${key(old)}`),newReservation=db.doc(`productNumbers/${key(item)}`);
+   const [settingsSnapshot,oldIndex,newIndex]=await Promise.all([
+    t.get(settings),t.get(oldReservation),t.get(newReservation),
+   ]);
+   if(!ready(settingsSnapshot)||!oldIndex.exists||oldIndex.data()?.productId!==ref.id||newIndex.exists){
+    throw Error('물품 번호 인덱스 불일치 또는 중복');
+   }
+   if(apply){t.delete(oldReservation);t.create(newReservation,{productId:ref.id});}
+  }
+  if(apply&&changed)t.update(ref,item);
+  return {id:ref.id,old:{category:old.category,name:old.name,displayNo:old.displayNo,isEnabled:old.isEnabled!==false},next:item};
+ });
+}
 function adminIdentity(u){return !!u&&typeof u.uid==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(u.uid)&&!/^\d{7}$/.test(u.uid)&&typeof u.email==='string'&&!u.email.toLowerCase().endsWith('@students.ohsung-rental.invalid')&&!Object.hasOwn(u.customClaims??{},'student_id');}
 function activeAdminProfile(data){
  return data&&typeof data.name==='string'&&data.name.trim().length>0&&data.name.length<=80&&
@@ -150,7 +181,7 @@ async function runPlatform(parsed,ctx){const {cmd,o}=parsed;if(bundledConfigComm
   else if(['products-edit','products-enable','products-disable'].includes(cmd))console.log(JSON.stringify(await editProduct(db,cmd,o,!!o.apply)));
   else if(cmd==='admins-list'){const rows=await db.collection('roles').where('admin','==',true).get();console.table(rows.docs.map(r=>({uid:r.id,admin:true})));}
   else if(cmd.startsWith('admin-'))await adminChange(auth,db,cmd,o,ctx);
-  else if(cmd==='rentals-summary'){const snap=await db.collection('rentals').get();const counts={};for(const d of snap.docs){const status=d.get('status')??'UNKNOWN';counts[status]=(counts[status]??0)+1;}console.log(JSON.stringify(counts));}
+  else if(cmd==='rentals-summary'){const snap=await db.collection('rentals').select('status').get();const counts={};for(const d of snap.docs){const status=d.get('status')??'UNKNOWN';counts[status]=(counts[status]??0)+1;}console.log(JSON.stringify(counts));}
   if(o.apply)ctx.audit({action:cmd,status:'finished'});return 0;
  }catch(e){if(o.apply)ctx.audit({action:cmd,status:'failed',code:e.code??'CHECK_OR_WRITE_FAILED'});throw e;}
 }
