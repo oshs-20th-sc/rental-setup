@@ -7,9 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'ohsung-rental');
+const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'rental');
+const LEGACY_SOURCE = path.resolve(ROOT, '..', 'ohsung-rental');
 const MANIFEST_PATH = 'config/firebase-config-provenance.json';
-const REPOSITORY = 'https://github.com/oshs-20th-sc/ohsung-rental.git';
+const REPOSITORY = 'https://github.com/oshs-sc/rental.git';
 const FILES = Object.freeze([
   Object.freeze({ sourcePath: 'firestore.rules', targetPath: 'config/firestore.rules' }),
   Object.freeze({ sourcePath: 'firestore.indexes.json', targetPath: 'config/firestore.indexes.json' }),
@@ -308,11 +309,12 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/sync-firestore-config.cjs check [--source PATH]',
-    '  node scripts/sync-firestore-config.cjs sync --source PATH --commit FULL_SHA',
+    '  node scripts/sync-firestore-config.cjs sync [--source PATH] --commit FULL_SHA',
     '',
     'check validates vendored files against config/firebase-config-provenance.json without fetching.',
     'When --source is supplied, check also compares a clean local website checkout byte-for-byte.',
     'sync reads only the requested commit from a clean local checkout whose HEAD matches --commit.',
+    'Without --source, sync looks for ../rental and falls back to ../ohsung-rental if needed.',
     'No Firebase CLI or remote configuration deploy is performed.',
   ].join('\n');
 }
@@ -330,7 +332,10 @@ function main(argv) {
         sourceDir: args.source ? path.resolve(args.source) : null,
       });
     }
-    const sourceDir = args.source ? path.resolve(args.source) : DEFAULT_SOURCE;
+    let sourceDir = args.source ? path.resolve(args.source) : DEFAULT_SOURCE;
+    if (!args.source && !fs.existsSync(sourceDir) && fs.existsSync(LEGACY_SOURCE)) {
+      sourceDir = LEGACY_SOURCE;
+    }
     const manifest = syncFromGit(root, { sourceDir, commit: args.commit });
     console.log('Synchronized ' + manifest.files.length + ' files from local commit ' + manifest.source.revision + '.');
     for (const file of manifest.files) {

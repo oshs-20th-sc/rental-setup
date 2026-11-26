@@ -4,7 +4,7 @@
 
 ## CLI의 역할
 
-Firebase 프로젝트의 설정, Rules, 인덱스, 학생 계정, 웹 관리자 권한, 물품 번호와 재고를 관리합니다. [웹사이트 저장소](https://github.com/oshs-20th-sc/ohsung-rental)는 로그인, 대여·반납, 관리자 화면과 정적 배포를 관리합니다.
+Firebase 프로젝트의 설정, Rules, 인덱스, 학생 계정, 웹 관리자 권한, 물품 번호와 재고를 관리합니다. [웹사이트 저장소](https://github.com/oshs-sc/rental)는 로그인, 대여·반납, 관리자 화면과 정적 배포를 관리합니다.
 
 ## Windows 설치
 
@@ -126,8 +126,8 @@ rental-setup --project PROJECT_ID products-import --file "/path/to/private/produ
 ## Firebase 웹 환경변수와 배포
 
 12. **CLI**에서 `web-config`를 실행합니다. 웹 앱이 여러 개면 `--app-id APP_ID`를 붙입니다.
-13. **Cloudflare Pages 콘솔**에서 아래 네 값을 Production 환경변수에 넣고 웹을 다시 빌드·배포합니다.
-14. **운영 확인**에서 학생·관리자 로그인, 물품 조회, 대여·반납, 승인과 이력 조회를 확인합니다. [웹사이트 배포 안내](https://github.com/oshs-20th-sc/ohsung-rental#readme)
+13. **호스팅 설정**에서 아래 네 값을 Cloudflare Pages의 Production 환경 변수 또는 GitHub Actions의 저장소 변수에 등록하고 배포합니다. [Cloudflare Pages](https://github.com/oshs-sc/rental#cloudflare-pages) · [GitHub Pages](https://github.com/oshs-sc/rental#github-pages)
+14. **운영 확인**에서 학생·관리자 로그인, 물품 조회, 대여·반납, 승인과 이력 조회를 확인합니다. [웹사이트 배포 안내](https://github.com/oshs-sc/rental#readme)
 
 ~~~sh
 rental-setup --project PROJECT_ID web-config

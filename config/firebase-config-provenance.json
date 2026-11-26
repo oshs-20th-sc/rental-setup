@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "source": {
-    "repository": "https://github.com/oshs-20th-sc/ohsung-rental.git",
-    "revision": "e549c51f4b21d41c698000caa37d9bb8e31cafff",
+    "repository": "https://github.com/oshs-sc/rental.git",
+    "revision": "ae2a6317acd24deb9e74477e33c94183a98d540e",
     "ref": "main",
     "verification": "clean-local-checkout",
     "networkFetch": false

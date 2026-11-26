@@ -107,13 +107,13 @@ rental-setup --project PROJECT_ID products-edit --id PRODUCT_ID --name "공용 �
 
 ~~~sh
 npm run config:check
-npm run config:check -- --source "../ohsung-rental"
-npm run config:sync -- --source "../ohsung-rental" --commit WEB_COMMIT_SHA
-npm run config:check -- --source "../ohsung-rental"
+npm run config:check -- --source "../rental"
+npm run config:sync -- --source "../rental" --commit WEB_COMMIT_SHA
+npm run config:check -- --source "../rental"
 npm test
 ~~~
 
-경로는 로컬 웹 저장소에 맞게 바꾸고 `WEB_COMMIT_SHA`에는 승인된 웹 커밋의 40자리 SHA를 입력합니다. 소스 비교는 깨끗한 웹 체크아웃에서 실행합니다. 도구는 로컬 Git 객체에서 Rules, 복합 인덱스, Firebase 설정과 학생 ID 변환 모듈을 가져옵니다. [출처 매니페스트](../config/firebase-config-provenance.json)에 각 파일의 SHA-256과 커밋을 기록합니다. 검사에서 불일치가 보고되면 차이를 검토하고 검증된 버전으로 동기화합니다. 이 명령은 Firebase 배포를 수행하지 않습니다.
+경로는 로컬 웹 저장소에 맞게 바꾸고 `WEB_COMMIT_SHA`에는 승인된 웹 커밋의 40자리 SHA를 입력합니다. `config:sync`에서 경로를 생략하면 인접한 `rental` 폴더를 사용하며, 해당 폴더가 없을 때 기존 `ohsung-rental` 폴더를 찾습니다. 소스 비교는 [웹 저장소](https://github.com/oshs-sc/rental)를 `origin`으로 사용하는 깨끗한 체크아웃에서 실행합니다. 도구는 로컬 Git 객체에서 Rules, 복합 인덱스, Firebase 설정과 학생 ID 변환 모듈을 가져옵니다. [출처 매니페스트](../config/firebase-config-provenance.json)에 각 파일의 SHA-256과 커밋을 기록합니다. 검사에서 불일치가 보고되면 차이를 검토하고 검증된 버전으로 동기화합니다. 이 명령은 Firebase 배포를 수행하지 않습니다.
 
 ## 자주 생기는 오류
 

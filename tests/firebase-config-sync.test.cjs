@@ -28,7 +28,7 @@ function makeSourceRepo() {
   git(repo, ['init', '-b', 'main']);
   git(repo, ['config', 'user.name', 'Config Sync Test']);
   git(repo, ['config', 'user.email', 'config-sync@example.test']);
-  git(repo, ['remote', 'add', 'origin', 'https://github.com/oshs-20th-sc/ohsung-rental.git']);
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/oshs-sc/rental.git']);
   return { parent, repo };
 }
 
@@ -100,6 +100,7 @@ test('sync reads only an explicit clean local commit and updates copies plus pro
   const secondCommit = writeSourceFiles(repo, updated);
   const manifest = syncFromGit(root, { sourceDir: repo, commit: secondCommit });
 
+  assert.equal(manifest.source.repository, 'https://github.com/oshs-sc/rental.git');
   assert.equal(manifest.source.revision, secondCommit);
   assert.equal(manifest.source.networkFetch, false);
   for (const file of FILES) {
@@ -107,6 +108,13 @@ test('sync reads only an explicit clean local commit and updates copies plus pro
   }
   assert.equal(assertBundledConfig(root).source.revision, secondCommit);
   assert.equal(runCheck(root, { sourceDir: repo, report() {} }), 0);
+  git(repo, ['remote', 'set-url', 'origin', 'git@github.com:oshs-sc/rental.git']);
+  assert.equal(runCheck(root, { sourceDir: repo, report() {} }), 0);
+  git(repo, ['remote', 'set-url', 'origin', 'https://github.com/oshs-sc/rental-setup.git']);
+  assert.throws(
+    () => runCheck(root, { sourceDir: repo, report() {} }),
+    /Source origin is not the expected repository/,
+  );
 
   const drifted = fs.readFileSync(path.join(root, FILES[0].targetPath));
   fs.writeFileSync(path.join(root, FILES[0].targetPath), Buffer.concat([drifted, Buffer.from('local edit')]));
